@@ -193,6 +193,42 @@ describe("rendered ecommerce signal detection", () => {
     });
   });
 
+  it("does not treat ordinary product copy as a returns policy", () => {
+    const signals = detectSignals(
+      snapshot({
+        texts: {
+          aboveFold: "",
+          nearBuyBox: "Soft cushioning with responsive energy return.",
+          belowFold: "",
+          footer: "",
+          pageWide: "",
+        },
+      }),
+    );
+
+    expect(signal(signals, "returns-refunds").status).toBe("not-detected");
+  });
+
+  it("keeps quoted evidence on word boundaries", () => {
+    const signals = detectSignals(
+      snapshot({
+        texts: {
+          aboveFold: "",
+          nearBuyBox:
+            "A long sentence about cushioning and comfort before the useful part. Free returns within 30 days of delivery. More copy follows here.",
+          belowFold: "",
+          footer: "",
+          pageWide: "",
+        },
+      }),
+    );
+
+    const evidence = signal(signals, "returns-refunds").evidence;
+    expect(evidence).toContain("returns");
+    expect(evidence.startsWith("…“") || evidence.startsWith("“")).toBe(true);
+    expect(evidence.includes("  ")).toBe(false);
+  });
+
   it('uses "not found in the rendered page" wording, never "does not exist"', () => {
     const signals = detectSignals(snapshot());
 

@@ -33,7 +33,7 @@ Phase 3 is implemented:
 
 There is **no** authentication, database, payment integration, analytics, Chrome extension, or saved reports in this phase. Multi-page scanning is not implemented.
 
-> **Render availability on Vercel:** the code uses `puppeteer-core` with `@sparticuz/chromium` and is configured to run on the Node.js runtime with `maxDuration = 60`. Serverless Chromium is memory- and bundle-sensitive. Verify `/api/render` on the deployed plan; if it cannot run reliably, the static HTML and product JSON report still works and rendered checks are shown as unavailable.
+> **Render availability on Vercel:** verified in production on 28 October 2026 against a public Shopify product page (rendered checks, signals, and a first-screen screenshot around 20 KB, about 9-13 seconds). It uses `puppeteer-core` with `@sparticuz/chromium` on the Node.js runtime, with `vercel.json` setting 2048 MB and `maxDuration = 60` for `/api/render`. Serverless Chromium is memory- and bundle-sensitive, so if it stops working the static HTML and product JSON report still works and rendered checks are shown as unavailable.
 
 
 ## Pages
@@ -93,7 +93,7 @@ npm test            # Run the suite once
 npm run test:watch  # Re-run on file changes
 ```
 
-The tests use local HTML/JSON fixtures and mocked PSI responses via Vitest. They never contact an external website. The suite currently has 17 files and 221 tests. Coverage includes:
+The tests use local HTML/JSON fixtures and mocked PSI responses via Vitest. They never contact an external website. The suite currently has 17 files and 223 tests. Coverage includes:
 
 - Public-URL acceptance and SSRF rejection (loopback, private, link-local, reserved, encoded IPs, internal suffixes, unsafe ports)
 - Private and reserved IP classification
@@ -133,7 +133,7 @@ This project is live at <https://shopify-cro-fixer.vercel.app>. The Vercel proje
 
 - **Node.js version:** set the Vercel project to Node.js 22.x or 24.x. The `engines` field requires `^22.12.0 || ^24.0.0 || >=26.0.0` because of Vitest 5.
 - **Runtime:** `/api/audit`, `/api/speed`, and `/api/render` declare `export const runtime = "nodejs"`. The audit route uses `node:http`, `node:https`, and `node:dns`; the render route launches a local browser and proxy. Do not move these routes to the Edge runtime.
-- **Duration and memory:** `/api/audit` and `/api/speed` declare `maxDuration = 30`. `/api/render` declares `maxDuration = 60` and has an internal 38-second deadline. Serverless Chromium is memory-hungry; use a plan/function size with at least 2048 MB if the deployed render fails with launch or memory errors.
+- **Duration and memory:** `/api/audit` and `/api/speed` declare `maxDuration = 30`. `/api/render` declares `maxDuration = 60`, has an internal 38-second deadline, and `vercel.json` requests 2048 MB for it. If rendering fails with launch or memory errors, first confirm that function size. `next.config.ts` keeps `@sparticuz/chromium` and `puppeteer-core` external and traces the Chromium binary into the route; removing that config breaks the deployed browser.
 - **Environment variables:** set `NEXT_PUBLIC_SITE_URL` to the real HTTPS domain. Add `PAGESPEED_API_KEY` as a **server-only** variable in Project > Settings > Environment Variables, then redeploy. `RENDERED_AUDIT_ENABLED` is optional and defaults to enabled; set it to `false` only if you need to turn rendering off.
 - **Build command:** `npm run build`. **Install command:** `npm install`. No database, queue, cron job, or paid API is required.
 - **Rate limiting:** the limiter is in-memory and per function instance. On Vercel, concurrent or scaled instances do not share counters. Add a shared limiter (for example Upstash Redis or Vercel KV) before relying on it for abuse protection. Rendered scans are limited to 2 per 10 minutes per source in addition to the 5 audits and 10 speed checks per 10 minutes.
@@ -233,7 +233,7 @@ If Google returns quota/rate-limit errors, times out, returns malformed data, or
 - Mobile viewport 390 × 844, device scale factor 1, mobile user agent
 - `DOMContentLoaded`, a bounded network-idle wait, then a short settle pause
 - A strict 38-second internal deadline and `maxDuration = 60`
-- A fresh isolated browser context per scan; no cookies or storage reuse
+- A fresh browser per scan with no reused cookies or storage. On serverless Chromium the browser's default context is used, because the bundled binary runs in single-process mode where extra contexts are unreliable.
 - A first-screen JPEG screenshot kept small enough for a safe response (or a clear skipped message)
 
 Measured checks:
@@ -381,7 +381,7 @@ npm run check       # Lint + typecheck + tests + build
 - Rendered signal detection is heuristic. “Not detected” means not found in that one rendered page, not proof that a feature is absent.
 - Cross-origin iframes, some app widgets, and A/B tests may not be captured.
 - The scanner does not click, add to cart, or complete checkout.
-- Serverless Chromium on Vercel can fail or be slow. The report falls back to static findings and explains which checks did not run.
+- Serverless Chromium on Vercel worked in the production check described above, but it can still fail or be slow on a cold start or a heavy page. The report then falls back to static findings and explains which checks did not run.
 - Bot protection, a login wall, or a JavaScript challenge can block a scan; the scan then fails explicitly instead of producing findings.
 - Pages that take longer than 8 seconds to respond, or 15 seconds for the whole static audit, time out. Rendered scans have a 38-second internal deadline.
 - Responses larger than 2 MB of HTML or 1 MB of product JSON are rejected.
@@ -406,8 +406,9 @@ npm run check       # Lint + typecheck + tests + build
 - Production site: <https://shopify-cro-fixer.vercel.app>
 - Pushes to `main` automatically deploy to Vercel.
 - `NEXT_PUBLIC_SITE_URL` is set to the production domain in Vercel.
-- `PAGESPEED_API_KEY` is required and server-only. Add it in Vercel Project > Settings > Environment Variables and redeploy. Never paste it into source, README, logs, or a tracked file.
+- `PAGESPEED_API_KEY` is required and server-only. Add it in Vercel Project > Settings > Environment Variables and redeploy. Never paste it into source, README, logs, or a tracked file. It was **not** configured at the time of the last production check, so the speed panel correctly showed `Speed data unavailable: PageSpeed API key not configured.`
 - `RENDERED_AUDIT_ENABLED` is optional and enabled by default. Set it to `false` only if serverless Chromium cannot run on the current plan; the UI then shows that rendered checks did not run.
+- Last production verification (28 October 2026): static audit returned 21 checks and 6 fix-plan actions with product JSON read successfully; `/api/render` returned 16 rendered checks and a screenshot in about 13 seconds; the browser UI merged static, product JSON, and rendered results into 37 checks with passed checks collapsed.
 
 Still recommended before significant traffic:
 

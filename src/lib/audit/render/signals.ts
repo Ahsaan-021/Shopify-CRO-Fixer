@@ -180,11 +180,27 @@ const text = (patterns: RegExp[], snapshot: RenderedSnapshot) => {
     for (const pattern of patterns) {
       const match = pattern.exec(content);
       if (!match) continue;
-      const start = Math.max(0, match.index - 35);
-      const end = Math.min(content.length, match.index + match[0].length + 45);
+
+      // Keep the snippet on word boundaries so evidence reads as a phrase
+      // instead of starting or ending mid-word.
+      let start = Math.max(0, match.index - 35);
+      if (start > 0) {
+        const nextSpace = content.indexOf(" ", start);
+        if (nextSpace !== -1 && nextSpace < match.index) start = nextSpace + 1;
+      }
+
+      let end = Math.min(content.length, match.index + match[0].length + 45);
+      if (end < content.length) {
+        const lastSpace = content.lastIndexOf(" ", end);
+        if (lastSpace > match.index + match[0].length) end = lastSpace;
+      }
+
+      const snippet = content.slice(start, end).trim();
+      const lead = start > 0 ? "…" : "";
+      const trail = end < content.length ? "…" : "";
       return {
         location,
-        evidence: `“${content.slice(start, end).trim()}”`,
+        evidence: `${lead}“${snippet}”${trail}`,
       };
     }
   }
@@ -270,7 +286,11 @@ const rules: SignalRule[] = [
     id: "returns-refunds",
     group: "shipping-returns",
     label: "Returns or refunds policy",
-    patterns: [/\b(returns?|refunds?|exchanges?)\b/i],
+    patterns: [
+      /\breturns?\s+(?:policy|policies|window|period|and|or)\b/i,
+      /\b(?:refunds?|exchanges?)\b/i,
+      /\breturns\b/i,
+    ],
     markers: ["returnsLink"],
   },
   {

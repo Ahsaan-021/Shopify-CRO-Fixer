@@ -73,10 +73,22 @@ export function auditErrorForHttpStatus(status: number) {
  * Keeps an untrusted Content-Type short and presentable while preserving
  * enough information to explain why the scanner stopped.
  */
-export function unsupportedContentError(contentType: string) {
+export function unsupportedContentError(
+  contentType: string,
+  expected: "html" | "json" = "html",
+) {
   const mediaType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+/i.exec(
     contentType.trim().toLowerCase(),
   )?.[0];
+
+  if (expected === "json") {
+    return new AuditScanError(
+      "UNSUPPORTED_CONTENT",
+      mediaType
+        ? `That address returned ${mediaType}, not JSON product data.`
+        : "That address did not return JSON product data.",
+    );
+  }
 
   return new AuditScanError(
     "UNSUPPORTED_CONTENT",

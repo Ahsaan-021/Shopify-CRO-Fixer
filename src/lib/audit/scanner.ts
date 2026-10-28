@@ -1,11 +1,21 @@
 import { analyzePage } from "@/lib/audit/analyze";
 import { AuditScanError } from "@/lib/audit/errors";
-import { fetchPublicHtml } from "@/lib/audit/fetch-page";
+import { fetchPublicHtml, fetchPublicJson } from "@/lib/audit/fetch-page";
+import { buildFixPlan } from "@/lib/audit/fix-plan";
+import {
+  buildProductJsonUrl,
+  extractProductHandle,
+  parseProductJsonResult,
+  productJsonFailureReason,
+  productJsonStatus,
+  type ProductJsonResult,
+} from "@/lib/audit/product-json";
 import { summariseChecks } from "@/lib/audit/summary";
 import type { AuditReport } from "@/lib/audit/types";
 import { validateAuditUrl } from "@/lib/audit/validation";
 
 const TOTAL_AUDIT_TIMEOUT_MS = 15_000;
+const PRODUCT_JSON_TIMEOUT_MS = 6_000;
 
 export async function runLiveAudit(rawUrl: string): Promise<AuditReport> {
   const validation = validateAuditUrl(rawUrl);
@@ -16,20 +26,54 @@ export async function runLiveAudit(rawUrl: string): Promise<AuditReport> {
   const startedAt = Date.now();
   const deadline = startedAt + TOTAL_AUDIT_TIMEOUT_MS;
   const page = await fetchPublicHtml(validation.url, deadline);
+
+  // Product JSON goes through the same secure transport as the HTML page.
+  // A failure here is reported as Unverified and never fails the whole audit.
+  const productHandle = extractProductHandle(page.finalUrl);
+  let productJson: ProductJsonResult;
+
+  if (!productHandle) {
+    productJson = {
+      status: "skipped",
+      reason:
+        "The final URL is not a /products/<handle> page, so Shopify product JSON was not requested.",
+    };
+  } else {
+    const productDeadline = Math.min(
+      deadline,
+      Date.now() + PRODUCT_JSON_TIMEOUT_MS,
+    );
+
+    try {
+      const productResponse = await fetchPublicJson(
+        buildProductJsonUrl(page.finalUrl, productHandle),
+        productDeadline,
+      );
+      productJson = parseProductJsonResult(
+        productResponse.text,
+        productHandle,
+      );
+    } catch (error) {
+      productJson = {
+        status: "unavailable",
+        reason: productJsonFailureReason(error),
+      };
+    }
+  }
+
   const analysis = analyzePage({
     html: page.html,
     finalUrl: page.finalUrl,
     httpStatus: page.status,
     bytes: page.bytes,
     xRobotsTag: page.xRobotsTag,
+    productJson,
   });
 
   const summary = summariseChecks(analysis.checks);
 
-  const verdict = analysis.verdict;
-
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode: "live",
     requestedUrl: validation.url,
     finalUrl: page.finalUrl,
@@ -43,12 +87,17 @@ export async function runLiveAudit(rawUrl: string): Promise<AuditReport> {
       canonicalUrl: analysis.canonicalUrl,
     },
     redirects: page.redirects,
-    verdict,
+    productJson: productJsonStatus(productJson),
+    verdict: analysis.verdict,
     summary,
+    fixPlan: buildFixPlan(analysis.checks),
     checks: analysis.checks,
     limitations: [
       "Only the initial HTML of one page was inspected. JavaScript-rendered content was not executed.",
-      "No speed, Core Web Vitals, real-device layout, interaction, add-to-cart, or checkout tests were run.",
+      "Shopify product checks use the store's public product JSON only when the final URL ends in /products/<handle>. If that JSON is disabled, blocked, or unavailable, those checks stay Unverified.",
+      "Google PageSpeed data is requested separately by the report. When it is unavailable, no speed numbers are invented.",
+      "Multi-page scanning was not performed in this version.",
+      "No real-device layout, interaction, add-to-cart, or checkout tests were run.",
       "A passing check means a signal was present. It does not prove that the page converts well.",
       "Shopify themes and apps can change markup after load, so verify important findings in a real browser.",
     ],

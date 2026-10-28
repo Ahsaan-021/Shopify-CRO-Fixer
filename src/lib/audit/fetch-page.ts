@@ -22,16 +22,63 @@ import type { AuditRedirect } from "@/lib/audit/types";
 
 const DNS_TIMEOUT_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 8_000;
-const MAX_RAW_BYTES = 2 * 1024 * 1024;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
+const MAX_JSON_BYTES = 1 * 1024 * 1024;
 const MAX_REDIRECTS = 4;
 
 const USER_AGENT =
-  "ShopifyCROFixer/0.1 (free static HTML audit; one page per request)";
+  "ShopifyCROFixer/0.2 (free static audit and public product data; one page per request)";
 
 type ResolvedTarget = {
   address: string;
   family: 4 | 6;
+};
+
+type ResourceKind = "html" | "json";
+
+type ResourceRules = {
+  accept: string;
+  maxBytes: number;
+  label: string;
+  contentTypeOk: (contentType: string) => boolean;
+  tooLargeMessage: string;
+};
+
+const RESOURCE_RULES: Record<ResourceKind, ResourceRules> = {
+  html: {
+    accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+    maxBytes: MAX_HTML_BYTES,
+    label: "page",
+    contentTypeOk: (contentType) =>
+      contentType.includes("text/html") ||
+      contentType.includes("application/xhtml+xml"),
+    tooLargeMessage:
+      "The page returned more than 2 MB of HTML, so the audit stopped.",
+  },
+  json: {
+    accept: "application/json,text/json;q=0.9,*/*;q=0.1",
+    maxBytes: MAX_JSON_BYTES,
+    label: "product data",
+    contentTypeOk: (contentType) =>
+      contentType.includes("application/json") ||
+      contentType.includes("+json") ||
+      contentType.includes("text/json"),
+    tooLargeMessage:
+      "The product data returned more than 1 MB of JSON, so it could not be read.",
+  },
+};
+
+type ResourceResponse = {
+  status: number;
+  headers: IncomingHttpHeaders;
+  text: string;
+  bytes: number;
+  redirectTo: string | null;
+};
+
+type RedirectableResponse = {
+  status: number;
+  redirectTo: string | null;
 };
 
 export type PageResponse = {
@@ -42,10 +89,23 @@ export type PageResponse = {
   redirectTo: string | null;
 };
 
+export type JsonResponse = {
+  status: number;
+  headers: IncomingHttpHeaders;
+  text: string;
+  bytes: number;
+  redirectTo: string | null;
+};
+
 export type PageRequest = (
   url: URL,
   deadline: number,
 ) => Promise<PageResponse>;
+
+export type JsonRequest = (
+  url: URL,
+  deadline: number,
+) => Promise<JsonResponse>;
 
 export type FetchedPage = {
   finalUrl: string;
@@ -54,6 +114,14 @@ export type FetchedPage = {
   bytes: number;
   redirects: AuditRedirect[];
   xRobotsTag: string;
+};
+
+export type FetchedJson = {
+  finalUrl: string;
+  status: number;
+  text: string;
+  bytes: number;
+  redirects: AuditRedirect[];
 };
 
 async function resolvePublicTarget(url: URL): Promise<ResolvedTarget> {
@@ -120,10 +188,11 @@ async function resolvePublicTarget(url: URL): Promise<ResolvedTarget> {
   };
 }
 
-export function decodeHtml(
+function decodeBody(
   body: Buffer,
   encodingHeader: string,
   contentType: string,
+  rules: ResourceRules,
 ): string {
   const encoding = encodingHeader.trim().toLowerCase();
   let decoded: Buffer;
@@ -132,17 +201,17 @@ export function decodeHtml(
     if (!encoding || encoding === "identity") {
       decoded = body;
     } else if (encoding === "gzip" || encoding === "x-gzip") {
-      decoded = gunzipSync(body, { maxOutputLength: MAX_HTML_BYTES });
+      decoded = gunzipSync(body, { maxOutputLength: rules.maxBytes });
     } else if (encoding === "deflate") {
-      decoded = inflateSync(body, { maxOutputLength: MAX_HTML_BYTES });
+      decoded = inflateSync(body, { maxOutputLength: rules.maxBytes });
     } else if (encoding === "br") {
       decoded = brotliDecompressSync(body, {
-        maxOutputLength: MAX_HTML_BYTES,
+        maxOutputLength: rules.maxBytes,
       });
     } else {
       throw new AuditScanError(
         "UNSUPPORTED_ENCODING",
-        "The page used a response encoding this scanner cannot read safely.",
+        `The ${rules.label} used a response encoding this scanner cannot read safely.`,
       );
     }
   } catch (error) {
@@ -158,23 +227,17 @@ export function decodeHtml(
       code === "ERR_BUFFER_TOO_LARGE" ||
       /max(imum)?\s*output|larger than|output length/i.test(message)
     ) {
-      throw new AuditScanError(
-        "RESPONSE_TOO_LARGE",
-        "The page returned more than 2 MB of HTML, so the audit stopped.",
-      );
+      throw new AuditScanError("RESPONSE_TOO_LARGE", rules.tooLargeMessage);
     }
 
     throw new AuditScanError(
       "INVALID_RESPONSE",
-      "The page's compressed response could not be decoded, so the audit stopped.",
+      `The ${rules.label}'s compressed response could not be decoded, so the audit stopped.`,
     );
   }
 
-  if (decoded.length > MAX_HTML_BYTES) {
-    throw new AuditScanError(
-      "RESPONSE_TOO_LARGE",
-      "The page returned more than 2 MB of HTML, so the audit stopped.",
-    );
+  if (decoded.length > rules.maxBytes) {
+    throw new AuditScanError("RESPONSE_TOO_LARGE", rules.tooLargeMessage);
   }
 
   const charsetMatch = /charset\s*=\s*"?([^";\s]+)/i.exec(contentType);
@@ -185,15 +248,25 @@ export function decodeHtml(
   } catch {
     throw new AuditScanError(
       "UNSUPPORTED_ENCODING",
-      "The page used a text encoding this scanner cannot read safely.",
+      `The ${rules.label} used a text encoding this scanner cannot read safely.`,
     );
   }
 }
 
-async function requestPage(
+export function decodeHtml(
+  body: Buffer,
+  encodingHeader: string,
+  contentType: string,
+): string {
+  return decodeBody(body, encodingHeader, contentType, RESOURCE_RULES.html);
+}
+
+async function requestResource(
   url: URL,
   deadline: number,
-): Promise<PageResponse> {
+  kind: ResourceKind,
+): Promise<ResourceResponse> {
+  const rules = RESOURCE_RULES[kind];
   const target = await resolvePublicTarget(url);
   const remaining = deadline - Date.now();
 
@@ -221,14 +294,14 @@ async function requestPage(
     headers: {
       Host: url.host,
       "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+      Accept: rules.accept,
       "Accept-Encoding": "gzip, deflate, br",
       "Cache-Control": "no-cache",
       Connection: "close",
     },
   };
 
-  return new Promise<PageResponse>((resolve, reject) => {
+  return new Promise<ResourceResponse>((resolve, reject) => {
     let settled = false;
 
     const finish = (callback: () => void) => {
@@ -272,7 +345,7 @@ async function requestPage(
           resolve({
             status,
             headers,
-            html: "",
+            text: "",
             bytes: 0,
             redirectTo: location,
           }),
@@ -287,12 +360,9 @@ async function requestPage(
       }
 
       const contentType = String(headers["content-type"] ?? "").toLowerCase();
-      if (
-        !contentType.includes("text/html") &&
-        !contentType.includes("application/xhtml+xml")
-      ) {
+      if (!rules.contentTypeOk(contentType)) {
         response.resume();
-        fail(unsupportedContentError(contentType));
+        fail(unsupportedContentError(contentType, kind));
         return;
       }
 
@@ -302,13 +372,8 @@ async function requestPage(
       response.on("data", (chunk: Buffer) => {
         totalBytes += chunk.length;
 
-        if (totalBytes > MAX_RAW_BYTES) {
-          fail(
-            new AuditScanError(
-              "RESPONSE_TOO_LARGE",
-              "The page returned more than 2 MB of HTML, so the audit stopped.",
-            ),
-          );
+        if (totalBytes > rules.maxBytes) {
+          fail(new AuditScanError("RESPONSE_TOO_LARGE", rules.tooLargeMessage));
           response.destroy();
           request.destroy();
           return;
@@ -321,23 +386,26 @@ async function requestPage(
       response.on("end", () => {
         try {
           const body = Buffer.concat(chunks);
-          const html = decodeHtml(
+          const text = decodeBody(
             body,
             String(headers["content-encoding"] ?? ""),
             contentType,
+            rules,
           );
 
-          const blocked = detectBlockedPage(html);
-          if (blocked) {
-            throw new AuditScanError("BLOCKED_BY_SITE", blocked.message);
+          if (kind === "html") {
+            const blocked = detectBlockedPage(text);
+            if (blocked) {
+              throw new AuditScanError("BLOCKED_BY_SITE", blocked.message);
+            }
           }
 
           finish(() =>
             resolve({
               status,
               headers,
-              html,
-              bytes: Buffer.byteLength(html, "utf8"),
+              text,
+              bytes: Buffer.byteLength(text, "utf8"),
               redirectTo: null,
             }),
           );
@@ -352,18 +420,42 @@ async function requestPage(
   });
 }
 
-export async function fetchPublicHtml(
+async function requestPage(
+  url: URL,
+  deadline: number,
+): Promise<PageResponse> {
+  const resource = await requestResource(url, deadline, "html");
+  return {
+    status: resource.status,
+    headers: resource.headers,
+    html: resource.text,
+    bytes: resource.bytes,
+    redirectTo: resource.redirectTo,
+  };
+}
+
+async function requestJson(
+  url: URL,
+  deadline: number,
+): Promise<JsonResponse> {
+  const resource = await requestResource(url, deadline, "json");
+  return {
+    status: resource.status,
+    headers: resource.headers,
+    text: resource.text,
+    bytes: resource.bytes,
+    redirectTo: resource.redirectTo,
+  };
+}
+
+async function followRedirects<T extends RedirectableResponse>(
   inputUrl: string,
   deadline: number,
-  requestPageFn: PageRequest = requestPage,
-): Promise<FetchedPage> {
+  requestFn: (url: URL, deadline: number) => Promise<T>,
+): Promise<{ finalUrl: string; response: T; redirects: AuditRedirect[] }> {
   const currentValidation = validateAuditUrl(inputUrl);
   if (!currentValidation.ok) {
-    throw new AuditScanError(
-      "INVALID_URL",
-      currentValidation.message,
-      400,
-    );
+    throw new AuditScanError("INVALID_URL", currentValidation.message, 400);
   }
 
   let currentUrl = new URL(currentValidation.url);
@@ -378,21 +470,10 @@ export async function fetchPublicHtml(
       );
     }
 
-    const response = await requestPageFn(currentUrl, deadline);
+    const response = await requestFn(currentUrl, deadline);
 
     if (!response.redirectTo) {
-      const xRobotsTag = Array.isArray(response.headers["x-robots-tag"])
-        ? response.headers["x-robots-tag"].join(", ")
-        : String(response.headers["x-robots-tag"] ?? "");
-
-      return {
-        finalUrl: currentUrl.toString(),
-        status: response.status,
-        html: response.html,
-        bytes: response.bytes,
-        redirects,
-        xRobotsTag,
-      };
+      return { finalUrl: currentUrl.toString(), response, redirects };
     }
 
     if (hop === MAX_REDIRECTS) {
@@ -433,4 +514,53 @@ export async function fetchPublicHtml(
     "TOO_MANY_REDIRECTS",
     "The page redirected too many times, so the audit stopped.",
   );
+}
+
+export async function fetchPublicHtml(
+  inputUrl: string,
+  deadline: number,
+  requestPageFn: PageRequest = requestPage,
+): Promise<FetchedPage> {
+  const { finalUrl, response, redirects } = await followRedirects(
+    inputUrl,
+    deadline,
+    requestPageFn,
+  );
+
+  const xRobotsTag = Array.isArray(response.headers["x-robots-tag"])
+    ? response.headers["x-robots-tag"].join(", ")
+    : String(response.headers["x-robots-tag"] ?? "");
+
+  return {
+    finalUrl,
+    status: response.status,
+    html: response.html,
+    bytes: response.bytes,
+    redirects,
+    xRobotsTag,
+  };
+}
+
+/**
+ * Fetches public Shopify product JSON through exactly the same DNS, IP-pinning,
+ * redirect, timeout, encoding, and size controls as the HTML page fetch.
+ */
+export async function fetchPublicJson(
+  inputUrl: string,
+  deadline: number,
+  requestJsonFn: JsonRequest = requestJson,
+): Promise<FetchedJson> {
+  const { finalUrl, response, redirects } = await followRedirects(
+    inputUrl,
+    deadline,
+    requestJsonFn,
+  );
+
+  return {
+    finalUrl,
+    status: response.status,
+    text: response.text,
+    bytes: response.bytes,
+    redirects,
+  };
 }

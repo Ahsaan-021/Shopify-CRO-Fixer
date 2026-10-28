@@ -35,6 +35,16 @@ export type AuditVerdict =
   | "major-issues"
   | "limited";
 
+export type AuditPriority = "high" | "medium" | "low";
+
+export type AuditEffort = "easy" | "moderate" | "advanced";
+
+export interface AuditSnippet {
+  label: string;
+  language: "liquid" | "html";
+  code: string;
+}
+
 export interface AuditCheck {
   id: string;
   title: string;
@@ -44,6 +54,12 @@ export interface AuditCheck {
   summary: string;
   evidence: string[];
   recommendation?: string;
+  /** Rule-based editorial priority. Never a predicted conversion lift. */
+  priority?: AuditPriority;
+  /** Editorial estimate of the work involved. */
+  effort?: AuditEffort;
+  fixSteps?: string[];
+  snippet?: AuditSnippet;
 }
 
 export interface AuditSummary {
@@ -59,8 +75,23 @@ export interface AuditRedirect {
   status: number;
 }
 
+export type ProductJsonStatus =
+  | { status: "checked"; reason?: undefined }
+  | { status: "unavailable" | "skipped"; reason: string };
+
+export interface FixPlanItem {
+  checkId: string;
+  title: string;
+  category: AuditCategory;
+  priority: AuditPriority;
+  effort: AuditEffort;
+  summary: string;
+  steps: string[];
+  snippet?: AuditSnippet;
+}
+
 export interface AuditReport {
-  schemaVersion: 1;
+  schemaVersion: 2;
   mode: "live";
   requestedUrl: string;
   finalUrl: string;
@@ -74,8 +105,10 @@ export interface AuditReport {
     canonicalUrl: string | null;
   };
   redirects: AuditRedirect[];
+  productJson: ProductJsonStatus;
   verdict: AuditVerdict;
   summary: AuditSummary;
+  fixPlan: FixPlanItem[];
   checks: AuditCheck[];
   limitations: string[];
 }
@@ -88,3 +121,36 @@ export interface AuditErrorPayload {
     upstreamStatus?: number;
   };
 }
+
+export type SpeedUnavailableCode =
+  | "QUOTA"
+  | "TIMEOUT"
+  | "UPSTREAM"
+  | "MALFORMED";
+
+export interface SpeedOpportunity {
+  title: string;
+  displayValue: string | null;
+  description: string | null;
+}
+
+export interface SpeedData {
+  source: "Google PageSpeed Insights (lab data)";
+  strategy: "mobile";
+  fetchedAt: string;
+  performanceScore: number | null;
+  lcpMs: number | null;
+  cls: number | null;
+  tbtMs: number | null;
+  inpMs: number | null;
+  opportunities: SpeedOpportunity[];
+  diagnostics: SpeedOpportunity[];
+}
+
+export type SpeedResult =
+  | { status: "ok"; data: SpeedData }
+  | {
+      status: "unavailable";
+      code: SpeedUnavailableCode;
+      message: string;
+    };

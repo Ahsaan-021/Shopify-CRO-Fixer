@@ -1,6 +1,8 @@
 import type {
   AuditCategory,
   AuditCheck,
+  AuditEffort,
+  AuditPriority,
   AuditSeverity,
 } from "@/lib/audit/types";
 import { Icon, type IconName } from "@/components/ui/icon";
@@ -58,6 +60,24 @@ const severityLabels: Record<
   unknown: "Unverified",
 };
 
+const priorityLabels: Record<AuditPriority, string> = {
+  high: "High priority",
+  medium: "Medium priority",
+  low: "Low priority",
+};
+
+const priorityStyles: Record<AuditPriority, string> = {
+  high: "border-danger/15 bg-danger-soft text-danger",
+  medium: "border-warning/15 bg-warning-soft text-warning",
+  low: "border-slate-200 bg-slate-100 text-slate-700",
+};
+
+const effortLabels: Record<AuditEffort, string> = {
+  easy: "Easy effort",
+  moderate: "Moderate effort",
+  advanced: "Advanced effort",
+};
+
 type AuditFindingProps = {
   check: AuditCheck;
 };
@@ -99,6 +119,18 @@ export function AuditFinding({ check }: AuditFindingProps) {
                 {severityLabels[check.severity]}
               </span>
             ) : null}
+            {check.priority ? (
+              <span
+                className={`rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold ${priorityStyles[check.priority]}`}
+              >
+                {priorityLabels[check.priority]}
+              </span>
+            ) : null}
+            {check.effort ? (
+              <span className="rounded-full border border-line bg-canvas px-2.5 py-1 text-[0.68rem] font-medium text-muted">
+                {effortLabels[check.effort]}
+              </span>
+            ) : null}
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold ${style.badge}`}
             >
@@ -135,6 +167,33 @@ export function AuditFinding({ check }: AuditFindingProps) {
             <p className="mt-1.5 text-sm leading-6 text-muted">
               {recommendation}
             </p>
+
+            {check.fixSteps && check.fixSteps.length > 0 ? (
+              <ol className="mt-3 space-y-2">
+                {check.fixSteps.map((step, index) => (
+                  <li
+                    key={`${check.id}-step-${index}`}
+                    className="flex gap-2.5 text-sm leading-6 text-muted"
+                  >
+                    <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-accent/20 bg-accent-soft text-[0.65rem] font-bold text-accent-dark">
+                      {index + 1}
+                    </span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+
+            {check.snippet ? (
+              <div className="mt-4">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted">
+                  {check.snippet.label}
+                </p>
+                <pre className="mt-1.5 overflow-x-auto rounded-lg border border-line bg-ink px-3.5 py-3 text-xs leading-5 text-white">
+                  <code>{check.snippet.code}</code>
+                </pre>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

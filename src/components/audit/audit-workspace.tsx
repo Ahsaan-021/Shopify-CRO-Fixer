@@ -9,6 +9,7 @@ import {
   type FormEvent,
 } from "react";
 import { AuditReportView } from "@/components/audit/audit-report";
+import type { SpeedPanelState } from "@/components/audit/speed-panel";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import {
@@ -18,7 +19,7 @@ import {
   unexpectedResponseFailure,
   type AuditFailure,
 } from "@/lib/audit/client-errors";
-import type { AuditReport } from "@/lib/audit/types";
+import type { AuditReport, SpeedResult } from "@/lib/audit/types";
 import { validateAuditUrl } from "@/lib/audit/validation";
 
 type AuditWorkspaceProps = {
@@ -26,6 +27,7 @@ type AuditWorkspaceProps = {
 };
 
 const CLIENT_TIMEOUT_MS = 25_000;
+const SPEED_CLIENT_TIMEOUT_MS = 27_000;
 
 function isAbortError(error: unknown) {
   return (
@@ -45,6 +47,40 @@ function isAuditReport(value: unknown): value is AuditReport {
   );
 }
 
+function isSpeedResult(value: unknown): value is SpeedResult {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as {
+    status?: unknown;
+    data?: unknown;
+    message?: unknown;
+  };
+
+  if (candidate.status === "unavailable") {
+    return typeof candidate.message === "string";
+  }
+
+  if (
+    candidate.status !== "ok" ||
+    typeof candidate.data !== "object" ||
+    candidate.data === null
+  ) {
+    return false;
+  }
+
+  const data = candidate.data as Record<string, unknown>;
+  return (
+    typeof data.source === "string" &&
+    Array.isArray(data.opportunities) &&
+    Array.isArray(data.diagnostics) &&
+    (data.performanceScore === null ||
+      typeof data.performanceScore === "number") &&
+    (data.lcpMs === null || typeof data.lcpMs === "number") &&
+    (data.cls === null || typeof data.cls === "number") &&
+    (data.tbtMs === null || typeof data.tbtMs === "number") &&
+    (data.inpMs === null || typeof data.inpMs === "number")
+  );
+}
+
 export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
   const inputId = useId();
   const helperId = useId();
@@ -53,10 +89,91 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [failure, setFailure] = useState<AuditFailure | null>(null);
   const [report, setReport] = useState<AuditReport | null>(null);
+  const [speedState, setSpeedState] = useState<SpeedPanelState>({
+    status: "idle",
+  });
   const [isLoading, setIsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const speedAbortRef = useRef<AbortController | null>(null);
   const autoRunRef = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  const loadSpeed = useCallback(async (finalUrl: string) => {
+    speedAbortRef.current?.abort();
+    const controller = new AbortController();
+    speedAbortRef.current = controller;
+    setSpeedState({ status: "loading" });
+
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, SPEED_CLIENT_TIMEOUT_MS);
+
+    const isCurrent = () => speedAbortRef.current === controller;
+
+    try {
+      const response = await fetch("/api/speed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: finalUrl }),
+        signal: controller.signal,
+        cache: "no-store",
+      });
+
+      let payload: unknown = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!isCurrent()) return;
+
+      if (!response.ok) {
+        setSpeedState({
+          status: "unavailable",
+          message: failureFromApi(response.status, payload).message,
+        });
+        return;
+      }
+
+      if (!isSpeedResult(payload)) {
+        setSpeedState({
+          status: "unavailable",
+          message: "Speed data unavailable (unexpected response).",
+        });
+        return;
+      }
+
+      if (payload.status === "ok") {
+        setSpeedState({ status: "ok", data: payload.data });
+      } else {
+        setSpeedState({
+          status: "unavailable",
+          message: payload.message,
+        });
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+
+      if (isAbortError(error)) {
+        setSpeedState({
+          status: "unavailable",
+          message: "Speed data unavailable (quota or timeout).",
+        });
+        return;
+      }
+
+      setSpeedState({
+        status: "unavailable",
+        message: "Speed data unavailable (network error).",
+      });
+    } finally {
+      clearTimeout(timeoutId);
+      if (speedAbortRef.current === controller) {
+        speedAbortRef.current = null;
+      }
+    }
+  }, []);
 
   const runAudit = useCallback(async (candidate: string) => {
     const validation = validateAuditUrl(candidate);
@@ -70,6 +187,9 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
     setFieldError(null);
     setFailure(null);
     setReport(null);
+    setSpeedState({ status: "idle" });
+    speedAbortRef.current?.abort();
+    speedAbortRef.current = null;
     setIsLoading(true);
 
     abortRef.current?.abort();
@@ -108,6 +228,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
       }
 
       setReport(payload);
+      void loadSpeed(payload.finalUrl);
       requestAnimationFrame(() => {
         resultsRef.current?.focus();
       });
@@ -126,7 +247,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
         setIsLoading(false);
       }
     }
-  }, []);
+  }, [loadSpeed]);
 
   useEffect(() => {
     if (!initialUrl || autoRunRef.current) return;
@@ -136,6 +257,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
     return () => {
       autoRunRef.current = false;
       abortRef.current?.abort();
+      speedAbortRef.current?.abort();
     };
   }, [initialUrl, runAudit]);
 
@@ -259,7 +381,8 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
             </li>
             <li className="flex gap-2">
               <span className="mt-2 size-1 shrink-0 rounded-full bg-accent" aria-hidden="true" />
-              Only HTML is downloaded. Scripts on the scanned site never run.
+              Only HTML and public Shopify product JSON are downloaded. Scripts on the
+              scanned site never run.
             </li>
           </ul>
         </div>
@@ -286,8 +409,8 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
                   Scanning the public HTML…
                 </h2>
                 <p className="mt-1 text-sm text-muted">
-                  Validating the destination, following safe redirects, and
-                  checking the response.
+                  Validating the destination, following safe redirects, checking
+                  the response, and reading public product data when available.
                 </p>
               </div>
             </div>
@@ -359,7 +482,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
             <p className="sr-only" role="status">
               Audit complete. Results are ready.
             </p>
-            <AuditReportView report={report} />
+            <AuditReportView report={report} speedState={speedState} />
           </>
         ) : (
           <div className="rounded-2xl border border-line bg-white p-6 shadow-sm sm:p-8">

@@ -1,9 +1,14 @@
 import type {
   AuditCheck,
+  AuditPriority,
   AuditReport,
   AuditVerdict,
 } from "@/lib/audit/types";
 import { AuditFinding } from "@/components/audit/audit-finding";
+import {
+  SpeedPanel,
+  type SpeedPanelState,
+} from "@/components/audit/speed-panel";
 import { Icon, type IconName } from "@/components/ui/icon";
 
 const verdictStyles: Record<
@@ -66,6 +71,12 @@ function safeDisplayUrl(value: string) {
 }
 
 const severityOrder = ["high", "medium", "low"] as const;
+
+const fixPriorityStyles: Record<AuditPriority, string> = {
+  high: "border-danger/15 bg-danger-soft text-danger",
+  medium: "border-warning/15 bg-warning-soft text-warning",
+  low: "border-slate-200 bg-slate-100 text-slate-700",
+};
 
 const severityGroupMeta: Record<
   (typeof severityOrder)[number],
@@ -146,7 +157,7 @@ function buildGroups(checks: AuditCheck[]): CheckGroup[] {
     groups.push({
       id: "unverified",
       title: "Unverified",
-      description: "These checks could not be completed from the initial HTML.",
+      description: "These checks could not be completed from the available data.",
       dot: "bg-slate-400",
       checks: unverified,
     });
@@ -166,7 +177,13 @@ function buildGroups(checks: AuditCheck[]): CheckGroup[] {
   return groups;
 }
 
-export function AuditReportView({ report }: { report: AuditReport }) {
+export function AuditReportView({
+  report,
+  speedState,
+}: {
+  report: AuditReport;
+  speedState: SpeedPanelState;
+}) {
   const verdict = verdictStyles[report.verdict];
   const groups = buildGroups(report.checks);
   const scannedAt = new Date(report.scannedAt).toLocaleString("en-US", {
@@ -186,7 +203,7 @@ export function AuditReportView({ report }: { report: AuditReport }) {
           </span>
           <div className="min-w-0">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-ink-soft">
-              <span>Live static HTML scan</span>
+              <span>Live HTML + product scan</span>
               <span aria-hidden="true">·</span>
               <span>{report.pageType === "product" ? "Product page" : "General page"}</span>
             </p>
@@ -229,11 +246,93 @@ export function AuditReportView({ report }: { report: AuditReport }) {
       <div className="flex items-start gap-2.5 rounded-xl border border-info/15 bg-info-soft px-4 py-3.5 text-sm leading-6 text-info">
         <Icon name="info" size={17} className="mt-0.5 shrink-0" />
         <p>
-          This report is based only on the initial HTML returned for one public
-          page. It does not render JavaScript, test checkout, or measure speed.
-          Verify findings in a real browser before changing production code.
+          This report is based on the initial HTML returned for one public page,
+          plus Shopify product JSON and Google PageSpeed data when available. It
+          does not render JavaScript or test checkout. Verify findings in a real
+          browser before changing production code.
         </p>
       </div>
+
+      {report.fixPlan.length > 0 ? (
+        <section
+          aria-labelledby="fix-plan-heading"
+          className="rounded-2xl border border-line bg-white p-5 sm:p-6"
+        >
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-4">
+            <div>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-accent">
+                Fix plan
+              </p>
+              <h2
+                id="fix-plan-heading"
+                className="mt-1 text-xl font-bold tracking-tight text-ink"
+              >
+                Start here
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+                The top actions in rule-based priority order. This is editorial
+                prioritisation, not a predicted conversion lift.
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full border border-line bg-canvas px-2.5 py-1 text-xs font-medium text-muted">
+              {report.fixPlan.length} action
+              {report.fixPlan.length === 1 ? "" : "s"}
+            </span>
+          </div>
+
+          <ol className="mt-4 space-y-2.5">
+            {report.fixPlan.map((item, index) => (
+              <li
+                key={item.checkId}
+                className="rounded-xl border border-line bg-canvas/70 p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 gap-3">
+                    <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-white">
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <a
+                        href={`#check-${item.checkId}`}
+                        className="text-sm font-semibold text-ink underline decoration-line-strong underline-offset-4 hover:decoration-accent"
+                      >
+                        {item.title}
+                      </a>
+                      <p className="mt-1 text-xs leading-5 text-muted">
+                        {item.summary}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    <span
+                      className={`rounded-full border px-2.5 py-1 text-[0.65rem] font-semibold capitalize ${fixPriorityStyles[item.priority]}`}
+                    >
+                      {item.priority} priority
+                    </span>
+                    <span className="rounded-full border border-line bg-white px-2.5 py-1 text-[0.65rem] font-medium capitalize text-muted">
+                      {item.effort} effort
+                    </span>
+                  </div>
+                </div>
+                <a
+                  href={`#check-${item.checkId}`}
+                  className="mt-2 inline-flex items-center gap-1 text-[0.7rem] font-semibold text-accent-dark underline decoration-accent/30 underline-offset-4 hover:decoration-accent"
+                >
+                  See full steps
+                  <Icon name="arrow-right" size={13} />
+                </a>
+              </li>
+            ))}
+          </ol>
+
+          <p className="mt-4 text-xs leading-5 text-muted">
+            Priority rule: a failed high/medium-severity check is High; a failed
+            low-severity check or a high/medium-severity warning is Medium; a
+            low-severity warning is Low. Effort is an editorial estimate. No
+            revenue or conversion estimates are produced.
+          </p>
+        </section>
+      ) : null}
 
       <div className="rounded-2xl border border-line bg-white p-5 sm:p-6">
         <div className="flex flex-col gap-3 border-b border-line pb-5 sm:flex-row sm:items-start sm:justify-between">
@@ -312,7 +411,18 @@ export function AuditReportView({ report }: { report: AuditReport }) {
             </ol>
           </div>
         ) : null}
+
+        <div className="mt-4 rounded-lg border border-line bg-canvas p-3 text-xs leading-5 text-muted">
+          <p className="font-semibold text-ink-soft">Shopify product JSON</p>
+          <p className="mt-1">
+            {report.productJson.status === "checked"
+              ? "Read successfully. The product checks below use this real product data."
+              : report.productJson.reason}
+          </p>
+        </div>
       </div>
+
+      <SpeedPanel state={speedState} />
 
       <div>
         <div className="flex flex-wrap items-end justify-between gap-3 px-1">

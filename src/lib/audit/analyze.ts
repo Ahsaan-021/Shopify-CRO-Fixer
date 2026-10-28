@@ -1,4 +1,9 @@
 import { parse, type HTMLElement } from "node-html-parser";
+import { applyFixPlan } from "@/lib/audit/fix-plan";
+import {
+  buildProductChecks,
+  type ProductJsonResult,
+} from "@/lib/audit/product-json";
 import type {
   AuditCheck,
   AuditCheckStatus,
@@ -12,6 +17,7 @@ type AnalysisInput = {
   httpStatus: number;
   bytes: number;
   xRobotsTag: string;
+  productJson?: ProductJsonResult;
 };
 
 type AnalysisResult = {
@@ -818,10 +824,22 @@ export function analyzePage(input: AnalysisInput): AnalysisResult {
     ),
   );
 
-  const passed = checks.filter((check) => check.status === "pass").length;
-  const warnings = checks.filter((check) => check.status === "warning").length;
-  const failed = checks.filter((check) => check.status === "fail").length;
-  const highSeverityFailure = checks.some(
+  if (isProductPage && input.productJson) {
+    checks.push(...buildProductChecks(input.productJson));
+  }
+
+  const plannedChecks = checks.map(applyFixPlan);
+
+  const passed = plannedChecks.filter(
+    (check) => check.status === "pass",
+  ).length;
+  const warnings = plannedChecks.filter(
+    (check) => check.status === "warning",
+  ).length;
+  const failed = plannedChecks.filter(
+    (check) => check.status === "fail",
+  ).length;
+  const highSeverityFailure = plannedChecks.some(
     (check) => check.status === "fail" && check.severity === "high",
   );
 
@@ -837,7 +855,7 @@ export function analyzePage(input: AnalysisInput): AnalysisResult {
   }
 
   return {
-    checks,
+    checks: plannedChecks,
     pageType: isProductPage ? "product" : "other",
     pageTypeEvidence,
     title: title || null,

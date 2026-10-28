@@ -31,15 +31,20 @@ export type RateLimitResult = {
  * isolated instances. Replace this with a shared store (for example Redis)
  * before exposing the audit API to substantial traffic.
  */
-export function checkRateLimit(key: string): RateLimitResult {
+export function checkRateLimit(
+  key: string,
+  options: { max?: number; windowMs?: number } = {},
+): RateLimitResult {
+  const windowMs = options.windowMs ?? WINDOW_MS;
+  const max = options.max ?? MAX_SCANS_PER_WINDOW;
   const now = Date.now();
-  const cutoff = now - WINDOW_MS;
+  const cutoff = now - windowMs;
   const entry = store.get(key) ?? { timestamps: [] };
   entry.timestamps = entry.timestamps.filter(
     (timestamp) => timestamp > cutoff,
   );
 
-  if (entry.timestamps.length >= MAX_SCANS_PER_WINDOW) {
+  if (entry.timestamps.length >= max) {
     const oldest = entry.timestamps[0];
     store.set(key, entry);
     return {
@@ -47,7 +52,7 @@ export function checkRateLimit(key: string): RateLimitResult {
       remaining: 0,
       retryAfterSeconds: Math.max(
         1,
-        Math.ceil((oldest + WINDOW_MS - now) / 1000),
+        Math.ceil((oldest + windowMs - now) / 1000),
       ),
     };
   }
@@ -66,7 +71,7 @@ export function checkRateLimit(key: string): RateLimitResult {
 
   return {
     allowed: true,
-    remaining: MAX_SCANS_PER_WINDOW - entry.timestamps.length,
+    remaining: max - entry.timestamps.length,
     retryAfterSeconds: 0,
   };
 }

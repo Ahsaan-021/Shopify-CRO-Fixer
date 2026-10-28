@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_PAGESPEED_TIMEOUT_MS,
   fetchPageSpeed,
   parsePageSpeedPayload,
   PAGESPEED_ENDPOINT,
@@ -237,6 +238,28 @@ describe("fetchPageSpeed", () => {
         apiKey: "test-key",
       }),
     ).toMatchObject({ status: "unavailable", code: "UPSTREAM" });
+  });
+
+  it("explains a rejected API key without echoing it", async () => {
+    const key = "bad-key-value";
+    const request: PageSpeedRequest = async () =>
+      jsonResponse({ error: { message: `API key not valid ${key}` } }, 400);
+
+    const result = await fetchPageSpeed("https://store.com/", {
+      request,
+      apiKey: key,
+    });
+
+    expect(result).toMatchObject({ status: "unavailable", code: "UPSTREAM" });
+    if (result.status === "unavailable") {
+      expect(result.message).toContain("rejected");
+      expect(result.message).toContain("PAGESPEED_API_KEY");
+    }
+    expect(JSON.stringify(result)).not.toContain(key);
+  });
+
+  it("allows enough time for a real PageSpeed audit", () => {
+    expect(DEFAULT_PAGESPEED_TIMEOUT_MS).toBeGreaterThanOrEqual(45_000);
   });
 
   it("never includes the API key in a failure result", async () => {

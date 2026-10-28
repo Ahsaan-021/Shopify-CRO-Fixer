@@ -32,7 +32,7 @@ type AuditWorkspaceProps = {
 };
 
 const CLIENT_TIMEOUT_MS = 25_000;
-const SPEED_CLIENT_TIMEOUT_MS = 27_000;
+const SPEED_CLIENT_TIMEOUT_MS = 58_000;
 const RENDER_CLIENT_TIMEOUT_MS = 50_000;
 
 function isAbortError(error: unknown) {

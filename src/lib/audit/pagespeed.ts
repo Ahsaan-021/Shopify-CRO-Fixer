@@ -8,7 +8,7 @@ import { validateAuditUrl } from "@/lib/audit/validation";
 export const PAGESPEED_ENDPOINT =
   "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
-export const DEFAULT_PAGESPEED_TIMEOUT_MS = 20_000;
+export const DEFAULT_PAGESPEED_TIMEOUT_MS = 50_000;
 const MAX_OPPORTUNITIES = 4;
 const MAX_DIAGNOSTICS = 3;
 
@@ -255,6 +255,13 @@ export async function fetchPageSpeed(
     }
 
     if (!response.ok) {
+      if (response.status === 400) {
+        return unavailable(
+          "UPSTREAM",
+          "Google PageSpeed rejected the request. Check that PAGESPEED_API_KEY is a valid key and that the PageSpeed Insights API is enabled for its project.",
+        );
+      }
+
       return unavailable(
         "UPSTREAM",
         `Google PageSpeed returned HTTP ${response.status}. Try again later.`,

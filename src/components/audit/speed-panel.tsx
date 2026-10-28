@@ -94,8 +94,8 @@ export function SpeedPanel({ state }: { state: SpeedPanelState }) {
               Measuring mobile speed
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              Asking Google PageSpeed Insights for lab data. This can take
-              10–30 seconds, and the rest of the report is already available.
+              Asking Google PageSpeed Insights for lab data. This can take up
+              to a minute, and the rest of the report is already available.
             </p>
           </div>
         </div>

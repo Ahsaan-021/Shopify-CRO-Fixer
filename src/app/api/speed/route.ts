@@ -4,7 +4,7 @@ import type { AuditErrorCode, AuditErrorPayload } from "@/lib/audit/types";
 import { validateAuditUrl } from "@/lib/audit/validation";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const MAX_BODY_BYTES = 4 * 1024;
 const SPEED_SCANS_PER_WINDOW = 10;

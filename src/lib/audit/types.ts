@@ -1,8 +1,12 @@
 export type AuditCategory =
-  | "content"
-  | "product"
-  | "mobile"
+  | "above-fold"
   | "trust"
+  | "offers"
+  | "social-proof"
+  | "product-content"
+  | "mobile"
+  | "product"
+  | "content"
   | "technical";
 
 export type AuditCheckStatus = "pass" | "warning" | "fail" | "not-checked";
@@ -25,7 +29,10 @@ export type AuditErrorCode =
   | "UPSTREAM_ERROR"
   | "RATE_LIMITED"
   | "INVALID_REQUEST"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  | "RENDER_DISABLED"
+  | "RENDER_UNAVAILABLE"
+  | "RENDER_TIMEOUT";
 
 export type AuditSeverity = "none" | "low" | "medium" | "high" | "unknown";
 
@@ -39,10 +46,26 @@ export type AuditPriority = "high" | "medium" | "low";
 
 export type AuditEffort = "easy" | "moderate" | "advanced";
 
+export type AuditSource =
+  | "static-html"
+  | "product-json"
+  | "rendered"
+  | "pagespeed";
+
 export interface AuditSnippet {
   label: string;
-  language: "liquid" | "html";
+  language: "liquid" | "html" | "css" | "javascript";
   code: string;
+}
+
+export interface AuditDeveloperTrack {
+  steps: string[];
+  snippet?: AuditSnippet;
+}
+
+export interface AuditFixTracks {
+  storeOwner: string[];
+  developer: AuditDeveloperTrack;
 }
 
 export interface AuditCheck {
@@ -60,6 +83,11 @@ export interface AuditCheck {
   effort?: AuditEffort;
   fixSteps?: string[];
   snippet?: AuditSnippet;
+  /** Short, non-numeric explanation of why the finding matters. */
+  whyItMatters?: string;
+  /** Separate guidance for store owners and theme developers. */
+  fixTracks?: AuditFixTracks;
+  source?: AuditSource;
 }
 
 export interface AuditSummary {
@@ -91,7 +119,7 @@ export interface FixPlanItem {
 }
 
 export interface AuditReport {
-  schemaVersion: 2;
+  schemaVersion: 3;
   mode: "live";
   requestedUrl: string;
   finalUrl: string;
@@ -123,6 +151,7 @@ export interface AuditErrorPayload {
 }
 
 export type SpeedUnavailableCode =
+  | "NO_KEY"
   | "QUOTA"
   | "TIMEOUT"
   | "UPSTREAM"
@@ -152,5 +181,108 @@ export type SpeedResult =
   | {
       status: "unavailable";
       code: SpeedUnavailableCode;
+      message: string;
+    };
+
+export type RenderedSignalGroup =
+  | "trust"
+  | "shipping-returns"
+  | "social-proof"
+  | "offers"
+  | "urgency"
+  | "product-content"
+  | "support"
+  | "accelerated-checkout";
+
+export type RenderedSignalStatus = "detected" | "not-detected" | "unable";
+
+export type RenderedLocation =
+  | "above-fold"
+  | "near-buy-box"
+  | "below-fold"
+  | "footer-only"
+  | "page-wide"
+  | "not-found";
+
+export interface RenderedSignal {
+  id: string;
+  group: RenderedSignalGroup;
+  label: string;
+  status: RenderedSignalStatus;
+  evidence: string;
+  location: RenderedLocation;
+}
+
+export interface RenderedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RenderedMetrics {
+  scrollWidth: number;
+  viewportWidth: number;
+  pageHeight: number;
+  titleText: string | null;
+  priceText: string | null;
+  compareAtText: string | null;
+  titleRect: RenderedRect | null;
+  priceRect: RenderedRect | null;
+  addToCartRect: RenderedRect | null;
+  addToCartLabel: string | null;
+  titleAboveFold: boolean;
+  priceAboveFold: boolean;
+  addToCartAboveFold: boolean;
+  stickyAddToCartDetected: boolean;
+  stickyAddToCartLabel: string | null;
+  productImageCount: number;
+  productImagesWithAlt: number;
+  videoDetected: boolean;
+  variantSelectorDetected: boolean;
+  variantPreselected: boolean | null;
+  discountBadgeDetected: boolean;
+  discountBadgeText: string | null;
+  overlayCoverage: number;
+  overlayText: string | null;
+  horizontalOverflow: boolean;
+}
+
+export interface RenderedScreenshot {
+  mime: "image/jpeg";
+  base64: string;
+  width: number;
+  height: number;
+  bytes: number;
+}
+
+export interface RenderedAudit {
+  scannedAt: string;
+  durationMs: number;
+  requestedUrl: string;
+  finalUrl: string;
+  viewport: { width: 390; height: 844; deviceScaleFactor: 1 };
+  userAgent: string;
+  screenshot: RenderedScreenshot | null;
+  metrics: RenderedMetrics;
+  signals: RenderedSignal[];
+  checks: AuditCheck[];
+  limitations: string[];
+}
+
+export type RenderedUnavailableCode =
+  | "DISABLED"
+  | "NO_BROWSER"
+  | "TIMEOUT"
+  | "BLOCKED"
+  | "UNSAFE_TARGET"
+  | "RATE_LIMITED"
+  | "ERROR";
+
+export type RenderedResult =
+  | { status: "ok"; data: RenderedAudit }
+  | {
+      status: "unavailable";
+      code: RenderedUnavailableCode;
       message: string;
     };

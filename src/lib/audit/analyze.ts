@@ -88,6 +88,7 @@ function makeCheck(
     summary,
     evidence,
     ...(recommendation ? { recommendation } : {}),
+    source: "static-html",
   };
 }
 

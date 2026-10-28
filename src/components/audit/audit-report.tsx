@@ -1,10 +1,19 @@
 import type {
+  AuditCategory,
   AuditCheck,
   AuditPriority,
   AuditReport,
   AuditVerdict,
 } from "@/lib/audit/types";
-import { AuditFinding } from "@/components/audit/audit-finding";
+import { buildFixPlan } from "@/lib/audit/fix-plan";
+import {
+  AuditFinding,
+  AuditFindingSummary,
+} from "@/components/audit/audit-finding";
+import {
+  RenderedPanel,
+  type RenderedPanelState,
+} from "@/components/audit/rendered-panel";
 import {
   SpeedPanel,
   type SpeedPanelState,
@@ -40,7 +49,7 @@ const verdictStyles: Record<
   "major-issues": {
     label: "Fix these first",
     description:
-      "At least one high-impact or multiple lower-impact issues appeared in the scanned HTML. Treat them as leads to verify.",
+      "At least one high-impact or multiple lower-impact issues appeared in the scan. Treat them as leads to verify.",
     icon: "x",
     panel: "border-danger/20 bg-danger-soft",
     iconWrap: "bg-danger text-white",
@@ -70,127 +79,154 @@ function safeDisplayUrl(value: string) {
   }
 }
 
-const severityOrder = ["high", "medium", "low"] as const;
-
 const fixPriorityStyles: Record<AuditPriority, string> = {
   high: "border-danger/15 bg-danger-soft text-danger",
   medium: "border-warning/15 bg-warning-soft text-warning",
   low: "border-slate-200 bg-slate-100 text-slate-700",
 };
 
-const severityGroupMeta: Record<
-  (typeof severityOrder)[number],
-  { title: string; description: string; dot: string }
-> = {
-  high: {
-    title: "High severity",
-    description: "Address these before lower-impact polish.",
-    dot: "bg-danger",
-  },
-  medium: {
-    title: "Medium severity",
-    description: "Worth reviewing next.",
-    dot: "bg-warning",
-  },
-  low: {
-    title: "Low severity",
-    description: "Lower-impact improvements.",
-    dot: "bg-slate-400",
-  },
-};
-
-type CheckGroup = {
+type FindingGroup = {
   id: string;
   title: string;
-  description?: string;
+  description: string;
   dot: string;
+  categories: AuditCategory[];
   checks: AuditCheck[];
 };
 
-function sortByStatus(a: AuditCheck, b: AuditCheck) {
-  if (a.status === b.status) return 0;
-  return a.status === "fail" ? -1 : 1;
-}
+/**
+ * CRO groups come first. Static SEO and technical hygiene checks are kept in
+ * their own group at the end so they do not dominate the report.
+ */
+const CRO_GROUPS: FindingGroup[] = [
+  {
+    id: "above-fold",
+    title: "Above the fold",
+    description: "What is visible on the first mobile screen.",
+    dot: "bg-danger",
+    categories: ["above-fold"],
+    checks: [],
+  },
+  {
+    id: "trust",
+    title: "Trust and guarantees",
+    description: "Guarantees, payment confidence, shipping, and returns.",
+    dot: "bg-warning",
+    categories: ["trust"],
+    checks: [],
+  },
+  {
+    id: "offers",
+    title: "Offers and pricing",
+    description: "Visible price context, bundles, discounts, and checkout options.",
+    dot: "bg-accent",
+    categories: ["offers"],
+    checks: [],
+  },
+  {
+    id: "social-proof",
+    title: "Social proof",
+    description: "Reviews, ratings, and visible customer evidence.",
+    dot: "bg-info",
+    categories: ["social-proof"],
+    checks: [],
+  },
+  {
+    id: "product-content",
+    title: "Product content",
+    description: "Images, variants, description depth, and buying detail.",
+    dot: "bg-accent-dark",
+    categories: ["product-content", "product"],
+    checks: [],
+  },
+  {
+    id: "mobile",
+    title: "Mobile usability",
+    description: "Tap targets, sticky controls, overflow, and overlays.",
+    dot: "bg-warning",
+    categories: ["mobile"],
+    checks: [],
+  },
+];
+
+const TECHNICAL_GROUP: FindingGroup = {
+  id: "seo-technical",
+  title: "SEO and technical hygiene",
+  description:
+    "Page metadata, indexability, and HTML structure. Useful for search and maintenance, but separate from CRO.",
+  dot: "bg-slate-400",
+  categories: ["content", "technical"],
+  checks: [],
+};
 
 /**
- * Builds the visible report groups. Severity groups contain only checks that
- * failed or produced a warning; passed and unverified checks get their own
- * sections so a missing check is never presented as a failure.
+ * Builds the visible groups for failed and warning checks. Unverified and
+ * passed checks get their own sections so a missing check is never presented
+ * as a failure.
  */
-function buildGroups(checks: AuditCheck[]): CheckGroup[] {
-  const actionable = checks.filter(
-    (check) => check.status === "fail" || check.status === "warning",
-  );
-
-  const groups: CheckGroup[] = severityOrder
-    .map((severity) => ({
-      id: `severity-${severity}`,
-      title: severityGroupMeta[severity].title,
-      description: severityGroupMeta[severity].description,
-      dot: severityGroupMeta[severity].dot,
-      checks: actionable
-        .filter((check) => check.severity === severity)
-        .sort(sortByStatus),
+function buildActionableGroups(checks: AuditCheck[]): FindingGroup[] {
+  return [...CRO_GROUPS, TECHNICAL_GROUP]
+    .map((group) => ({
+      ...group,
+      checks: checks
+        .filter(
+          (check) =>
+            group.categories.includes(check.category) &&
+            (check.status === "fail" || check.status === "warning"),
+        )
+        .sort((a, b) => {
+          if (a.status !== b.status) return a.status === "fail" ? -1 : 1;
+          const order = { high: 0, medium: 1, low: 2, unknown: 3, none: 4 };
+          return order[a.severity] - order[b.severity];
+        }),
     }))
     .filter((group) => group.checks.length > 0);
+}
 
-  const other = actionable
-    .filter(
-      (check) =>
-        !severityOrder.some((severity) => check.severity === severity),
-    )
-    .sort(sortByStatus);
-
-  if (other.length > 0) {
-    groups.push({
-      id: "severity-other",
-      title: "Other findings",
-      dot: "bg-warning",
-      checks: other,
-    });
-  }
-
-  const unverified = checks.filter(
-    (check) => check.status === "not-checked",
-  );
-  if (unverified.length > 0) {
-    groups.push({
-      id: "unverified",
-      title: "Unverified",
-      description: "These checks could not be completed from the available data.",
-      dot: "bg-slate-400",
-      checks: unverified,
-    });
-  }
-
-  const passed = checks.filter((check) => check.status === "pass");
-  if (passed.length > 0) {
-    groups.push({
-      id: "passed",
-      title: "Passed checks",
-      description: "Signals that were present in the response.",
-      dot: "bg-accent",
-      checks: passed,
-    });
-  }
-
-  return groups;
+function sourceLabel(report: AuditReport, rendered: boolean) {
+  return [
+    "static HTML",
+    report.productJson.status === "checked" ? "Shopify product JSON" : null,
+    rendered ? "rendered mobile page" : null,
+    "PageSpeed when available",
+  ]
+    .filter(Boolean)
+    .join(" + ");
 }
 
 export function AuditReportView({
   report,
   speedState,
+  renderedState = { status: "idle" },
 }: {
   report: AuditReport;
   speedState: SpeedPanelState;
+  renderedState?: RenderedPanelState;
 }) {
   const verdict = verdictStyles[report.verdict];
-  const groups = buildGroups(report.checks);
+  const renderedAudit =
+    renderedState.status === "ok" ? renderedState.data : null;
+  const checks = renderedAudit
+    ? [...report.checks, ...renderedAudit.checks]
+    : report.checks;
+
+  const summary = {
+    passed: checks.filter((check) => check.status === "pass").length,
+    warnings: checks.filter((check) => check.status === "warning").length,
+    failed: checks.filter((check) => check.status === "fail").length,
+    notChecked: checks.filter((check) => check.status === "not-checked").length,
+  };
+  const actionableCount = summary.failed + summary.warnings;
+
+  const fixPlan = renderedAudit ? buildFixPlan(checks) : report.fixPlan;
+  const groups = buildActionableGroups(checks);
+  const unverified = checks.filter((check) => check.status === "not-checked");
+  const passed = checks.filter((check) => check.status === "pass");
+
   const scannedAt = new Date(report.scannedAt).toLocaleString("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
   });
-  const actionableCount = report.summary.failed + report.summary.warnings;
 
   return (
     <section aria-labelledby="audit-results-heading" className="space-y-5">
@@ -203,7 +239,7 @@ export function AuditReportView({
           </span>
           <div className="min-w-0">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-ink-soft">
-              <span>Live HTML + product scan</span>
+              <span>Live page scan</span>
               <span aria-hidden="true">·</span>
               <span>{report.pageType === "product" ? "Product page" : "General page"}</span>
             </p>
@@ -221,11 +257,11 @@ export function AuditReportView({
 
         <div className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[
-            { value: report.summary.passed, label: "Passed", color: "text-accent-dark" },
-            { value: report.summary.warnings, label: "Warnings", color: "text-warning" },
-            { value: report.summary.failed, label: "Failed", color: "text-danger" },
+            { value: summary.passed, label: "Passed", color: "text-accent-dark" },
+            { value: summary.warnings, label: "Warnings", color: "text-warning" },
+            { value: summary.failed, label: "Failed", color: "text-danger" },
             {
-              value: report.summary.notChecked,
+              value: summary.notChecked,
               label: "Unverified",
               color: "text-slate-600",
             },
@@ -246,14 +282,14 @@ export function AuditReportView({
       <div className="flex items-start gap-2.5 rounded-xl border border-info/15 bg-info-soft px-4 py-3.5 text-sm leading-6 text-info">
         <Icon name="info" size={17} className="mt-0.5 shrink-0" />
         <p>
-          This report is based on the initial HTML returned for one public page,
-          plus Shopify product JSON and Google PageSpeed data when available. It
-          does not render JavaScript or test checkout. Verify findings in a real
-          browser before changing production code.
+          <span className="font-semibold">Automated detection is heuristic.</span>{" "}
+          This report uses {sourceLabel(report, Boolean(renderedAudit))}. It does
+          not test checkout or prove a conversion outcome. Confirm important
+          findings in a real browser before changing production code.
         </p>
       </div>
 
-      {report.fixPlan.length > 0 ? (
+      {fixPlan.length > 0 ? (
         <section
           aria-labelledby="fix-plan-heading"
           className="rounded-2xl border border-line bg-white p-5 sm:p-6"
@@ -275,13 +311,13 @@ export function AuditReportView({
               </p>
             </div>
             <span className="shrink-0 rounded-full border border-line bg-canvas px-2.5 py-1 text-xs font-medium text-muted">
-              {report.fixPlan.length} action
-              {report.fixPlan.length === 1 ? "" : "s"}
+              {fixPlan.length} action
+              {fixPlan.length === 1 ? "" : "s"}
             </span>
           </div>
 
           <ol className="mt-4 space-y-2.5">
-            {report.fixPlan.map((item, index) => (
+            {fixPlan.map((item, index) => (
               <li
                 key={item.checkId}
                 className="rounded-xl border border-line bg-canvas/70 p-4"
@@ -368,6 +404,15 @@ export function AuditReportView({
             <p>
               HTTP {report.httpStatus} · {formatBytes(report.document.bytes)} HTML
             </p>
+            {renderedAudit ? (
+              <p>
+                Rendered scan:{" "}
+                {new Date(renderedAudit.scannedAt).toLocaleTimeString("en-US", {
+                  timeStyle: "short",
+                })}{" "}
+                · 390 × 844
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -388,16 +433,30 @@ export function AuditReportView({
           </div>
           <div>
             <dt className="font-semibold uppercase tracking-wide text-muted">
-              Detected page signals
+              Data sources
             </dt>
             <dd className="mt-1 text-ink-soft">
-              {report.pageTypeEvidence}
-              <span className="mt-1 block text-xs text-muted">
-                Signals only, not confirmed Shopify identification.
-              </span>
+              {sourceLabel(report, Boolean(renderedAudit))}
             </dd>
           </div>
         </dl>
+
+        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+          <div className="rounded-lg border border-line bg-canvas px-3 py-2 text-muted">
+            <span className="font-semibold text-ink-soft">
+              Detected page signals:{" "}
+            </span>
+            {report.pageTypeEvidence}
+          </div>
+          <div className="rounded-lg border border-line bg-canvas px-3 py-2 text-muted">
+            <span className="font-semibold text-ink-soft">
+              Product JSON:{" "}
+            </span>
+            {report.productJson.status === "checked"
+              ? "read successfully"
+              : report.productJson.reason}
+          </div>
+        </div>
 
         {report.redirects.length > 0 ? (
           <div className="mt-4 rounded-lg border border-line bg-canvas p-3 text-xs leading-5 text-muted">
@@ -411,15 +470,6 @@ export function AuditReportView({
             </ol>
           </div>
         ) : null}
-
-        <div className="mt-4 rounded-lg border border-line bg-canvas p-3 text-xs leading-5 text-muted">
-          <p className="font-semibold text-ink-soft">Shopify product JSON</p>
-          <p className="mt-1">
-            {report.productJson.status === "checked"
-              ? "Read successfully. The product checks below use this real product data."
-              : report.productJson.reason}
-          </p>
-        </div>
       </div>
 
       <SpeedPanel state={speedState} />
@@ -430,12 +480,14 @@ export function AuditReportView({
             <h2 className="text-xl font-bold tracking-tight text-ink">
               Findings in detail
             </h2>
-            <p className="mt-1 text-sm text-muted">
-              Grouped by severity. Unverified checks are not failures.
+            <p className="mt-1 max-w-2xl text-sm text-muted">
+              Conversion (CRO) issues are shown first. SEO and technical
+              hygiene is kept separate at the end. Unverified checks are not
+              failures.
             </p>
           </div>
           <span className="text-xs font-medium text-muted">
-            {report.checks.length} checks
+            {checks.length} checks
           </span>
         </div>
 
@@ -474,11 +526,9 @@ export function AuditReportView({
                     />
                     {group.title}
                   </h3>
-                  {group.description ? (
-                    <p className="mt-1 text-xs leading-5 text-muted">
-                      {group.description}
-                    </p>
-                  ) : null}
+                  <p className="mt-1 text-xs leading-5 text-muted">
+                    {group.description}
+                  </p>
                 </div>
                 <span className="shrink-0 rounded-full border border-line bg-white px-2.5 py-1 text-xs font-medium text-muted">
                   {group.checks.length}
@@ -492,7 +542,63 @@ export function AuditReportView({
             </section>
           ))}
         </div>
+
+        {unverified.length > 0 ? (
+          <section aria-labelledby="group-unverified" className="mt-7">
+            <div className="mb-3 flex items-start justify-between gap-4 px-1">
+              <div>
+                <h3
+                  id="group-unverified"
+                  className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.12em] text-ink-soft"
+                >
+                  <span className="size-2 rounded-full bg-slate-400" aria-hidden="true" />
+                  Unverified
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-muted">
+                  These checks could not be completed from the available data.
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full border border-line bg-white px-2.5 py-1 text-xs font-medium text-muted">
+                {unverified.length}
+              </span>
+            </div>
+            <div className="space-y-3">
+              {unverified.map((check) => (
+                <AuditFinding key={check.id} check={check} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {passed.length > 0 ? (
+          <details className="group mt-7 rounded-xl border border-line bg-white p-5">
+            <summary className="cursor-pointer list-none marker:hidden">
+              <span className="flex items-center justify-between gap-4">
+                <span>
+                  <span className="text-sm font-semibold uppercase tracking-[0.12em] text-ink-soft">
+                    Passed checks ({passed.length})
+                  </span>
+                  <span className="mt-1 block text-xs font-normal leading-5 text-muted">
+                    Collapsed by default. Each line is a one-line summary.
+                  </span>
+                </span>
+                <Icon
+                  name="chevron-right"
+                  size={17}
+                  className="shrink-0 text-muted transition-transform group-open:rotate-90"
+                />
+              </span>
+            </summary>
+            <ul className="mt-4 border-t border-line pt-1">
+              {passed.map((check) => (
+                <AuditFindingSummary key={check.id} check={check} />
+              ))}
+            </ul>
+          </details>
+        ) : null}
       </div>
+
+      <RenderedPanel state={renderedState} />
 
       <details className="group rounded-xl border border-line bg-white p-5">
         <summary className="cursor-pointer list-none text-sm font-semibold text-ink marker:hidden">
@@ -515,6 +621,17 @@ export function AuditReportView({
               {limitation}
             </li>
           ))}
+          {renderedAudit
+            ? renderedAudit.limitations.map((limitation) => (
+                <li
+                  key={`rendered-${limitation}`}
+                  className="flex gap-2 text-sm leading-6 text-muted"
+                >
+                  <span className="mt-2.5 size-1 shrink-0 rounded-full bg-muted" aria-hidden="true" />
+                  {limitation}
+                </li>
+              ))
+            : null}
         </ul>
       </details>
     </section>

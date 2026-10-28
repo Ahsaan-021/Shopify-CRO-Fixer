@@ -73,7 +73,7 @@ export async function runLiveAudit(rawUrl: string): Promise<AuditReport> {
   const summary = summariseChecks(analysis.checks);
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     mode: "live",
     requestedUrl: validation.url,
     finalUrl: page.finalUrl,

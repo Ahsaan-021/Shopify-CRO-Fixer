@@ -94,6 +94,18 @@ const failureMeta: Record<AuditFailureCode, FailureMeta> = {
     title: "The audit service had a problem",
     hint: "This is a hosting or audit-service problem, not your store. If you just deployed, wait for the deployment to finish, then try again.",
   },
+  RENDER_DISABLED: {
+    title: "Rendered scanning is turned off",
+    hint: "This deployment has rendered scanning disabled. Static HTML and product JSON findings still work.",
+  },
+  RENDER_UNAVAILABLE: {
+    title: "The rendered scan is unavailable",
+    hint: "A browser could not be started on the server. Static HTML and product JSON findings are unaffected.",
+  },
+  RENDER_TIMEOUT: {
+    title: "The rendered scan timed out",
+    hint: "The mobile page took too long to render. Static HTML and product JSON findings are unaffected.",
+  },
   NETWORK_ERROR: {
     title: "The audit service couldn't be reached",
     hint: "Check your internet connection. The scan request never reached the server.",

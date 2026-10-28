@@ -9,6 +9,7 @@ import {
   type FormEvent,
 } from "react";
 import { AuditReportView } from "@/components/audit/audit-report";
+import type { RenderedPanelState } from "@/components/audit/rendered-panel";
 import type { SpeedPanelState } from "@/components/audit/speed-panel";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -19,7 +20,11 @@ import {
   unexpectedResponseFailure,
   type AuditFailure,
 } from "@/lib/audit/client-errors";
-import type { AuditReport, SpeedResult } from "@/lib/audit/types";
+import type {
+  AuditReport,
+  RenderedResult,
+  SpeedResult,
+} from "@/lib/audit/types";
 import { validateAuditUrl } from "@/lib/audit/validation";
 
 type AuditWorkspaceProps = {
@@ -28,6 +33,7 @@ type AuditWorkspaceProps = {
 
 const CLIENT_TIMEOUT_MS = 25_000;
 const SPEED_CLIENT_TIMEOUT_MS = 27_000;
+const RENDER_CLIENT_TIMEOUT_MS = 50_000;
 
 function isAbortError(error: unknown) {
   return (
@@ -81,6 +87,33 @@ function isSpeedResult(value: unknown): value is SpeedResult {
   );
 }
 
+function isRenderedResult(value: unknown): value is RenderedResult {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as {
+    status?: unknown;
+    message?: unknown;
+    data?: unknown;
+  };
+
+  if (candidate.status === "unavailable") {
+    return typeof candidate.message === "string";
+  }
+
+  if (candidate.status !== "ok" || typeof candidate.data !== "object" || candidate.data === null) {
+    return false;
+  }
+
+  const data = candidate.data as Record<string, unknown>;
+  return (
+    Array.isArray(data.checks) &&
+    Array.isArray(data.signals) &&
+    Array.isArray(data.limitations) &&
+    typeof data.metrics === "object" &&
+    data.metrics !== null &&
+    (data.screenshot === null || typeof data.screenshot === "object")
+  );
+}
+
 export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
   const inputId = useId();
   const helperId = useId();
@@ -92,9 +125,13 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
   const [speedState, setSpeedState] = useState<SpeedPanelState>({
     status: "idle",
   });
+  const [renderedState, setRenderedState] = useState<RenderedPanelState>({
+    status: "idle",
+  });
   const [isLoading, setIsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const speedAbortRef = useRef<AbortController | null>(null);
+  const renderAbortRef = useRef<AbortController | null>(null);
   const autoRunRef = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -175,6 +212,86 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
     }
   }, []);
 
+  const loadRendered = useCallback(async (finalUrl: string) => {
+    renderAbortRef.current?.abort();
+    const controller = new AbortController();
+    renderAbortRef.current = controller;
+    setRenderedState({ status: "loading" });
+
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, RENDER_CLIENT_TIMEOUT_MS);
+
+    const isCurrent = () => renderAbortRef.current === controller;
+
+    try {
+      const response = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: finalUrl }),
+        signal: controller.signal,
+        cache: "no-store",
+      });
+
+      let payload: unknown = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!isCurrent()) return;
+
+      if (!response.ok) {
+        setRenderedState({
+          status: "unavailable",
+          message: failureFromApi(response.status, payload).message,
+        });
+        return;
+      }
+
+      if (!isRenderedResult(payload)) {
+        setRenderedState({
+          status: "unavailable",
+          message:
+            "The rendered audit returned an unexpected response. Static findings are still shown.",
+        });
+        return;
+      }
+
+      if (payload.status === "ok") {
+        setRenderedState({ status: "ok", data: payload.data });
+      } else {
+        setRenderedState({
+          status: "unavailable",
+          message: payload.message,
+        });
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+
+      if (isAbortError(error)) {
+        setRenderedState({
+          status: "unavailable",
+          message:
+            "The rendered scan timed out. Static HTML and product JSON findings are still shown.",
+        });
+        return;
+      }
+
+      setRenderedState({
+        status: "unavailable",
+        message:
+          "The rendered scan could not be reached. Static HTML and product JSON findings are still shown.",
+      });
+    } finally {
+      clearTimeout(timeoutId);
+      if (renderAbortRef.current === controller) {
+        renderAbortRef.current = null;
+      }
+    }
+  }, []);
+
   const runAudit = useCallback(async (candidate: string) => {
     const validation = validateAuditUrl(candidate);
 
@@ -188,8 +305,11 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
     setFailure(null);
     setReport(null);
     setSpeedState({ status: "idle" });
+    setRenderedState({ status: "idle" });
     speedAbortRef.current?.abort();
     speedAbortRef.current = null;
+    renderAbortRef.current?.abort();
+    renderAbortRef.current = null;
     setIsLoading(true);
 
     abortRef.current?.abort();
@@ -229,6 +349,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
 
       setReport(payload);
       void loadSpeed(payload.finalUrl);
+      void loadRendered(payload.finalUrl);
       requestAnimationFrame(() => {
         resultsRef.current?.focus();
       });
@@ -247,7 +368,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
         setIsLoading(false);
       }
     }
-  }, [loadSpeed]);
+  }, [loadSpeed, loadRendered]);
 
   useEffect(() => {
     if (!initialUrl || autoRunRef.current) return;
@@ -258,6 +379,7 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
       autoRunRef.current = false;
       abortRef.current?.abort();
       speedAbortRef.current?.abort();
+      renderAbortRef.current?.abort();
     };
   }, [initialUrl, runAudit]);
 
@@ -283,8 +405,9 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
             Enter a public Shopify URL
           </h2>
           <p id={helperId} className="mt-2 text-sm leading-6 text-muted">
-            Use a direct product page for product-specific checks. Only
-            server-rendered HTML is inspected.
+            Use a direct product page for product-specific checks. The scan reads
+            the public HTML first, then renders the mobile page in an isolated
+            browser.
           </p>
 
           <div className="mt-5">
@@ -381,8 +504,14 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
             </li>
             <li className="flex gap-2">
               <span className="mt-2 size-1 shrink-0 rounded-full bg-accent" aria-hidden="true" />
-              Only HTML and public Shopify product JSON are downloaded. Scripts on the
-              scanned site never run.
+              The public HTML is read first, then a separate mobile render runs
+              so a slow page cannot break the static report.
+            </li>
+            <li className="flex gap-2">
+              <span className="mt-2 size-1 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+              The rendered browser uses a mobile viewport and an allow-listing
+              proxy. Private addresses, files, uploads, and websockets are
+              blocked.
             </li>
           </ul>
         </div>
@@ -482,7 +611,11 @@ export function AuditWorkspace({ initialUrl = "" }: AuditWorkspaceProps) {
             <p className="sr-only" role="status">
               Audit complete. Results are ready.
             </p>
-            <AuditReportView report={report} speedState={speedState} />
+            <AuditReportView
+              report={report}
+              speedState={speedState}
+              renderedState={renderedState}
+            />
           </>
         ) : (
           <div className="rounded-2xl border border-line bg-white p-6 shadow-sm sm:p-8">

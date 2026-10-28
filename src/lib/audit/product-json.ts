@@ -1,4 +1,5 @@
 import { AuditScanError } from "@/lib/audit/errors";
+import { CRO_THRESHOLDS } from "@/lib/audit/thresholds";
 import type {
   AuditCheck,
   AuditCheckStatus,
@@ -11,7 +12,6 @@ const MAX_IMAGES = 250;
 const MAX_VARIANTS = 2_000;
 const MAX_OPTIONS = 20;
 const MAX_TAGS = 100;
-const SHORT_DESCRIPTION = 120;
 
 export type ProductImage = {
   alt: string | null;
@@ -327,6 +327,7 @@ function makeCheck(
     summary,
     evidence,
     recommendation,
+    source: "product-json",
   };
 }
 
@@ -419,26 +420,43 @@ export function buildProductChecks(result: ProductJsonResult): AuditCheck[] {
         "warning",
         "medium",
         "No product images were listed in Shopify product JSON.",
-        ["Product JSON images: 0"],
+        [
+          "Product JSON images: 0",
+          `Editorial guideline: at least ${CRO_THRESHOLDS.productImagesRecommended} distinct images.`,
+        ],
         "Add clear product photos in Shopify admin under Products > the product > Media. Add alt text to each meaningful image.",
       ),
     );
-  } else if (missingAlt > 0) {
+  } else if (
+    missingAlt > 0 ||
+    imageCount < CRO_THRESHOLDS.productImagesRecommended
+  ) {
+    const parts: string[] = [];
+    if (missingAlt > 0) {
+      parts.push(`${missingAlt} of ${imageCount} product images have no alt text`);
+    }
+    if (imageCount < CRO_THRESHOLDS.productImagesRecommended) {
+      parts.push(
+        `${imageCount} image${imageCount === 1 ? "" : "s"} listed, below the editorial guideline of ${CRO_THRESHOLDS.productImagesRecommended}`,
+      );
+    }
+
     checks.push(
       makeCheck(
         "product-images",
         "Product images and alt text",
         "warning",
-        missingAlt / imageCount >= 0.5 ? "medium" : "low",
-        `${missingAlt} of ${imageCount} product images have no alt text.`,
+        missingAlt / imageCount >= 0.5 || imageCount < 2 ? "medium" : "low",
+        `${parts.join("; ")}.`,
         [
           `Product JSON images: ${imageCount}`,
           `Images without alt text: ${missingAlt}`,
+          `Editorial guideline: at least ${CRO_THRESHOLDS.productImagesRecommended} distinct images.`,
           missingAltPositions.length > 0
             ? `Positions without alt text: ${missingAltPositions.join(", ")}${missingAlt > missingAltPositions.length ? ", …" : ""}`
             : "",
         ].filter(Boolean),
-        "In Shopify admin, open the product's Media section and add descriptive alt text to each meaningful image. Use an empty alt only for decorative images.",
+        "In Shopify admin, open the product's Media section, add useful photos, and add descriptive alt text to each meaningful image. Use an empty alt only for decorative images.",
       ),
     );
   } else {
@@ -452,6 +470,7 @@ export function buildProductChecks(result: ProductJsonResult): AuditCheck[] {
         [
           `Product JSON images: ${imageCount}`,
           `Images without alt text: 0`,
+          `Editorial guideline: at least ${CRO_THRESHOLDS.productImagesRecommended} distinct images.`,
         ],
         "No change is needed based on this check. Confirm the images still look correct in a browser.",
       ),
@@ -637,7 +656,7 @@ export function buildProductChecks(result: ProductJsonResult): AuditCheck[] {
         "Open Products > the product > Description and explain what the product is, who it is for, key details, sizing or compatibility, and what is included.",
       ),
     );
-  } else if (data.descriptionLength < SHORT_DESCRIPTION) {
+  } else if (data.descriptionLength < CRO_THRESHOLDS.descriptionMinChars) {
     checks.push(
       makeCheck(
         "product-description",
@@ -648,6 +667,7 @@ export function buildProductChecks(result: ProductJsonResult): AuditCheck[] {
         [
           `Description text length: ${data.descriptionLength} characters`,
           `Description begins: “${data.descriptionPreview}”`,
+          `Editorial guideline: around ${CRO_THRESHOLDS.descriptionMinChars} characters or more. This is guidance, not a proven conversion rule.`,
         ],
         "Open Products > the product > Description and answer the main buying questions. Keep it specific rather than adding filler.",
       ),

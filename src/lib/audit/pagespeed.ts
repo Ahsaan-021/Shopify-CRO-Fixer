@@ -42,7 +42,7 @@ function cleanText(value: string) {
 }
 
 function unavailable(
-  code: "QUOTA" | "TIMEOUT" | "UPSTREAM" | "MALFORMED",
+  code: "NO_KEY" | "QUOTA" | "TIMEOUT" | "UPSTREAM" | "MALFORMED",
   message: string,
 ): SpeedResult {
   return { status: "unavailable", code, message };
@@ -221,13 +221,19 @@ export async function fetchPageSpeed(
     );
   }
 
+  const apiKey = options.apiKey?.trim();
+  if (!apiKey) {
+    return unavailable(
+      "NO_KEY",
+      "Speed data unavailable: PageSpeed API key not configured.",
+    );
+  }
+
   const endpoint = new URL(PAGESPEED_ENDPOINT);
   endpoint.searchParams.set("url", validation.url);
   endpoint.searchParams.set("strategy", "mobile");
   endpoint.searchParams.append("category", "performance");
-
-  const apiKey = options.apiKey?.trim();
-  if (apiKey) endpoint.searchParams.set("key", apiKey);
+  endpoint.searchParams.set("key", apiKey);
 
   const request =
     options.request ??

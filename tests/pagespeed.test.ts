@@ -165,25 +165,31 @@ describe("fetchPageSpeed", () => {
     expect(JSON.stringify(result)).not.toContain("test-key");
   });
 
-  it("works without an API key", async () => {
-    let requested = "";
-    const request: PageSpeedRequest = async (url) => {
-      requested = url;
+  it("returns the exact missing-key message without calling Google", async () => {
+    let calls = 0;
+    const request: PageSpeedRequest = async () => {
+      calls += 1;
       return jsonResponse(payload());
     };
 
     const result = await fetchPageSpeed("https://store.com/", { request });
-    const endpoint = new URL(requested);
 
-    expect(endpoint.searchParams.has("key")).toBe(false);
-    expect(result.status).toBe("ok");
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({
+      status: "unavailable",
+      code: "NO_KEY",
+      message: "Speed data unavailable: PageSpeed API key not configured.",
+    });
   });
 
   it("maps quota errors to an honest unavailable result", async () => {
     const request: PageSpeedRequest = async () =>
       jsonResponse({ error: { message: "quota" } }, 429);
 
-    const result = await fetchPageSpeed("https://store.com/", { request });
+    const result = await fetchPageSpeed("https://store.com/", {
+      request,
+      apiKey: "test-key",
+    });
 
     expect(result).toMatchObject({
       status: "unavailable",
@@ -203,6 +209,7 @@ describe("fetchPageSpeed", () => {
 
     const result = await fetchPageSpeed("https://store.com/", {
       request,
+      apiKey: "test-key",
       timeoutMs: 10,
     });
 
@@ -219,11 +226,30 @@ describe("fetchPageSpeed", () => {
       new Response("unavailable", { status: 503 });
 
     expect(
-      await fetchPageSpeed("https://store.com/", { request: malformed }),
+      await fetchPageSpeed("https://store.com/", {
+        request: malformed,
+        apiKey: "test-key",
+      }),
     ).toMatchObject({ status: "unavailable", code: "MALFORMED" });
     expect(
-      await fetchPageSpeed("https://store.com/", { request: upstream }),
+      await fetchPageSpeed("https://store.com/", {
+        request: upstream,
+        apiKey: "test-key",
+      }),
     ).toMatchObject({ status: "unavailable", code: "UPSTREAM" });
+  });
+
+  it("never includes the API key in a failure result", async () => {
+    const key = "very-secret-key-value";
+    const request: PageSpeedRequest = async () =>
+      jsonResponse({ error: { message: `bad key ${key}` } }, 429);
+
+    const result = await fetchPageSpeed("https://store.com/", {
+      request,
+      apiKey: key,
+    });
+
+    expect(JSON.stringify(result)).not.toContain(key);
   });
 
   it("rejects an invalid target before calling Google", async () => {

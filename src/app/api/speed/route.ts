@@ -97,6 +97,17 @@ export async function POST(request: Request) {
       return errorResponse("INVALID_URL", validation.message, 400);
     }
 
+    if (!process.env.PAGESPEED_API_KEY?.trim()) {
+      return Response.json(
+        {
+          status: "unavailable",
+          code: "NO_KEY",
+          message: "Speed data unavailable: PageSpeed API key not configured.",
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
     const rateLimit = checkRateLimit(`speed:${getClientKey(request)}`, {
       max: SPEED_SCANS_PER_WINDOW,
       windowMs: SPEED_WINDOW_MS,

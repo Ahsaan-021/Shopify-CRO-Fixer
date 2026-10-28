@@ -70,7 +70,7 @@ function checkedData(overrides: Partial<ProductData> = {}): ProductData {
     handle: "trail-runner-2",
     productType: "Running shoes",
     tags: ["trail", "running"],
-    descriptionLength: 180,
+    descriptionLength: 500,
     descriptionPreview: "Lightweight trail running shoes.",
     images: [
       { alt: "Side view", position: 1 },
@@ -240,6 +240,58 @@ describe("buildProductChecks with real product data", () => {
       "product-description",
     );
     expect(short).toMatchObject({ status: "warning", severity: "low" });
+
+    const justUnder = getCheck(
+      buildProductChecks({
+        status: "checked",
+        data: checkedData({ descriptionLength: 399 }),
+      }),
+      "product-description",
+    );
+    expect(justUnder).toMatchObject({ status: "warning", severity: "low" });
+    expect(justUnder.evidence.join(" ")).toContain(
+      "around 400 characters or more",
+    );
+
+    const atThreshold = getCheck(
+      buildProductChecks({
+        status: "checked",
+        data: checkedData({ descriptionLength: 400 }),
+      }),
+      "product-description",
+    );
+    expect(atThreshold.status).toBe("pass");
+  });
+
+  it("uses the editorial image-count guideline without inventing data", () => {
+    const twoImages = buildProductChecks({
+      status: "checked",
+      data: checkedData({
+        images: [
+          { alt: "Front", position: 1 },
+          { alt: "Back", position: 2 },
+        ],
+      }),
+    });
+    const twoImageCheck = getCheck(twoImages, "product-images");
+    expect(twoImageCheck.status).toBe("warning");
+    expect(twoImageCheck.summary).toContain("below the editorial guideline of 4");
+    expect(twoImageCheck.evidence.join(" ")).toContain(
+      "Editorial guideline: at least 4 distinct images",
+    );
+
+    const fourImages = buildProductChecks({
+      status: "checked",
+      data: checkedData({
+        images: [
+          { alt: "Front", position: 1 },
+          { alt: "Back", position: 2 },
+          { alt: "Side", position: 3 },
+          { alt: "Detail", position: 4 },
+        ],
+      }),
+    });
+    expect(getCheck(fourImages, "product-images").status).toBe("pass");
   });
 
   it("marks checks that need variants as unverified when there are none", () => {

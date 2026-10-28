@@ -29,6 +29,19 @@ const LOCAL_CHROME_PATHS = [
 
 const MAX_NAVIGATIONS = 4;
 
+/**
+ * Bounds and redacts a server-side error message before it reaches a log.
+ * Page URLs, hostnames, IP addresses, and API-key-shaped values are removed.
+ */
+function redactDiagnostic(message: string) {
+  return message
+    .replace(/https?:\/\/[^\s'"]+/gi, "[url]")
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "[ip]")
+    .replace(/\bAIza[\w-]{10,}\b/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .slice(0, 300);
+}
+
 function localChromePath() {
   const configured = process.env.CHROME_EXECUTABLE_PATH?.trim();
   if (configured && existsSync(configured)) return configured;
@@ -45,7 +58,7 @@ function logBrowserDiagnostic(stage: string, error: unknown) {
   const name = error instanceof Error ? error.name : typeof error;
   const message = error instanceof Error ? error.message : String(error);
   console.warn(
-    `[render] ${stage} failed { name: ${name}, message: ${message.slice(0, 300)} }`,
+    `[render] ${stage} failed { name: ${name}, message: ${redactDiagnostic(message)} }`,
   );
 }
 
@@ -101,6 +114,14 @@ function classifyRenderError(error: unknown): RenderFailure {
       "The rendered page could not be reached through the security proxy.",
     );
   }
+
+  // Server-only diagnostic. URLs, addresses, and key-like values are removed
+  // before logging so this stays safe even if it runs in production.
+  console.warn(
+    `[render] render failed { name: ${
+      error instanceof Error ? error.name : typeof error
+    }, message: ${redactDiagnostic(message)} }`,
+  );
 
   return new RenderFailure(
     "ERROR",

@@ -8,7 +8,7 @@ import { validateAuditUrl } from "@/lib/audit/validation";
 export const PAGESPEED_ENDPOINT =
   "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
-export const DEFAULT_PAGESPEED_TIMEOUT_MS = 50_000;
+export const DEFAULT_PAGESPEED_TIMEOUT_MS = 100_000;
 const MAX_OPPORTUNITIES = 4;
 const MAX_DIAGNOSTICS = 3;
 

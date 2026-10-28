@@ -259,7 +259,7 @@ describe("fetchPageSpeed", () => {
   });
 
   it("allows enough time for a real PageSpeed audit", () => {
-    expect(DEFAULT_PAGESPEED_TIMEOUT_MS).toBeGreaterThanOrEqual(45_000);
+    expect(DEFAULT_PAGESPEED_TIMEOUT_MS).toBeGreaterThanOrEqual(90_000);
   });
 
   it("never includes the API key in a failure result", async () => {

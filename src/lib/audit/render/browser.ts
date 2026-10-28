@@ -58,7 +58,7 @@ async function resolveExecutable() {
     // Screenshots and layout measurements do not need WebGL, so skip the
     // SwiftShader extraction and its memory cost.
     chromium.setGraphicsMode = false;
-    const executablePath = await chromium.executablePath("/tmp");
+    const executablePath = await chromium.executablePath();
     return {
       executablePath,
       headless: true as const,

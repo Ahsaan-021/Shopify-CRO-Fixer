@@ -286,7 +286,7 @@ export async function fetchPageSpeed(
     if (isAbortError(error)) {
       return unavailable(
         "TIMEOUT",
-        "Google PageSpeed did not finish in time, so no speed numbers are shown.",
+        "Google PageSpeed did not finish this page within 100 seconds. Very heavy or bot-protected pages can exceed Google's audit time, so no speed numbers are shown.",
       );
     }
 

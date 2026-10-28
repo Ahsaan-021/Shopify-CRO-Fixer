@@ -64,7 +64,13 @@ function logBrowserDiagnostic(stage: string, error: unknown) {
 
 async function resolveExecutable() {
   const local = localChromePath();
-  if (local) return { executablePath: local, headless: true as const, args: [] };
+  if (local) {
+    return {
+      executablePath: local,
+      headless: true as const,
+      args: [] as string[],
+    };
+  }
 
   try {
     const { default: chromium } = await import("@sparticuz/chromium");
@@ -74,7 +80,10 @@ async function resolveExecutable() {
     const executablePath = await chromium.executablePath();
     return {
       executablePath,
-      headless: true as const,
+      // The bundled binary is chrome-headless-shell and its own arguments
+      // already include --headless='shell'. Matching that mode here avoids a
+      // conflicting headless flag from Puppeteer.
+      headless: "shell" as const,
       args: chromium.args,
     };
   } catch (error) {
@@ -224,7 +233,10 @@ export async function renderPageSnapshot(
         );
       });
 
-    const context = await browser.createBrowserContext();
+    // Serverless Chromium runs with --single-process, where creating a second
+    // browser context is unreliable. A freshly launched browser is already an
+    // isolated context, so use its default one.
+    const context = browser.defaultBrowserContext();
     const page = await context.newPage();
 
     browser.on("targetcreated", (target) => {

@@ -4,6 +4,8 @@ A modern SaaS-style foundation and a working first version of a Shopify conversi
 
 The current tool inspects the **initial HTML** of one public page and reports only signals it can verify. It does not invent conversion scores, run JavaScript from scanned sites, or claim to replace analytics, customer research, or a full UX review.
 
+**Live production:** <https://shopify-cro-fixer.vercel.app>
+
 ## Current status
 
 Phase 1 is implemented:
@@ -100,11 +102,11 @@ Copy `.env.example` to `.env.local` if you want to override it. Never commit `.e
 
 ## Deploying to Vercel
 
-The project is compatible with Vercel's Node.js runtime, with these constraints:
+This project is live at <https://shopify-cro-fixer.vercel.app>. The Vercel project is connected to this GitHub repository, so pushes to `main` trigger a new production deployment. The notes below still apply to a fresh deployment:
 
 - **Node.js version:** set the Vercel project to Node.js 22.x or 24.x. The `engines` field requires `^22.12.0 || ^24.0.0 || >=26.0.0` because of Vitest 5.
 - **Runtime:** `/api/audit` declares `export const runtime = "nodejs"` because it uses `node:http`, `node:https`, and `node:dns`. Do not move this route to the Edge runtime.
-- **Duration:** `/api/audit` declares `maxDuration = 30`. This fits the Hobby plan's 300-second function limit and leaves room for the 15-second audit deadline plus platform overhead.
+- **Duration:** `/api/audit` declares `maxDuration = 30`. This fits within Vercel's function duration limits and leaves room for the 15-second audit deadline plus platform overhead.
 - **Environment variable:** set `NEXT_PUBLIC_SITE_URL` to the real HTTPS domain (for example `https://your-project.vercel.app`). The localhost default would produce wrong canonical, sitemap, and robots URLs in production.
 - **Build command:** `npm run build`. **Install command:** `npm install`. No database, queue, cron job, or paid API is required.
 - **Rate limiting:** the limiter is in-memory and per function instance. On Vercel, concurrent or scaled instances do not share counters. Add a shared limiter (for example Upstash Redis or Vercel KV) before relying on it for abuse protection.
@@ -262,14 +264,16 @@ npm run check       # Lint + typecheck + tests + build
 4. Add a shared rate limiter and production observability.
 5. Add real payment and subscription infrastructure only when the Pro scope is delivered and accurately described.
 
-## Manual actions
+## Deployment status
 
-None are required to run the site locally. Before deploying publicly:
+- GitHub repository: <https://github.com/Ahsaan-021/Shopify-CRO-Fixer>
+- Production site: <https://shopify-cro-fixer.vercel.app>
+- Pushes to `main` automatically deploy to Vercel.
+- `NEXT_PUBLIC_SITE_URL` is set to the production domain in Vercel.
 
-1. Create a Git repository and push the project (this folder is not a Git repository yet).
-2. Set `NEXT_PUBLIC_SITE_URL` to the real HTTPS domain in the hosting dashboard.
-3. Choose Node.js 22.x or 24.x in the hosting project settings.
-4. Deploy with the Node.js runtime; do not move `/api/audit` to Edge.
-5. Run `npm run check` and a live scan against the deployed `/api/audit` endpoint.
-6. Add shared rate limiting and hosting-level abuse protection.
-7. Review privacy and data-retention requirements.
+Still recommended before significant traffic:
+
+1. Add shared rate limiting and hosting-level abuse protection.
+2. Review privacy and data-retention requirements.
+3. Re-run `npm run check` before each release.
+4. Keep `/api/audit` on the Node.js runtime; do not move it to Edge.

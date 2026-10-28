@@ -35,19 +35,37 @@ function localChromePath() {
   return LOCAL_CHROME_PATHS.find((candidate) => existsSync(candidate));
 }
 
+/**
+ * Logs a short, safe diagnostic. It is server-only, never returns to the
+ * client, and records only the error class and a bounded message. Messages can
+ * contain file paths from the serverless runtime, but no page content, API
+ * keys, or visitor data.
+ */
+function logBrowserDiagnostic(stage: string, error: unknown) {
+  const name = error instanceof Error ? error.name : typeof error;
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(
+    `[render] ${stage} failed { name: ${name}, message: ${message.slice(0, 300)} }`,
+  );
+}
+
 async function resolveExecutable() {
   const local = localChromePath();
   if (local) return { executablePath: local, headless: true as const, args: [] };
 
   try {
     const { default: chromium } = await import("@sparticuz/chromium");
-    const executablePath = await chromium.executablePath();
+    // Screenshots and layout measurements do not need WebGL, so skip the
+    // SwiftShader extraction and its memory cost.
+    chromium.setGraphicsMode = false;
+    const executablePath = await chromium.executablePath("/tmp");
     return {
       executablePath,
       headless: true as const,
       args: chromium.args,
     };
-  } catch {
+  } catch (error) {
+    logBrowserDiagnostic("chromium extraction", error);
     throw new RenderFailure(
       "NO_BROWSER",
       "Rendered scanning is unavailable because no browser could be started on the server.",
@@ -151,31 +169,39 @@ export async function renderPageSnapshot(
   try {
     const executable = await resolveExecutable();
 
-    browser = await puppeteer.launch({
-      executablePath: executable.executablePath,
-      headless: executable.headless,
-      timeout: 20_000,
-      args: [
-        ...executable.args,
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-quic",
-        "--disable-notifications",
-        "--disable-geolocation",
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--mute-audio",
-        "--no-first-run",
-        "--no-default-browser-check",
-        `--proxy-server=${proxy.url}`,
-        "--proxy-bypass-list=<-loopback>",
-        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-        "--disable-features=WebRtcHideLocalIpsWithMdns,MediaRouter,OptimizationHints",
-      ],
-      defaultViewport: RENDERED_VIEWPORT,
-    });
+    browser = await puppeteer
+      .launch({
+        executablePath: executable.executablePath,
+        headless: executable.headless,
+        timeout: 20_000,
+        args: [
+          ...executable.args,
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--disable-quic",
+          "--disable-notifications",
+          "--disable-geolocation",
+          "--disable-background-timer-throttling",
+          "--disable-renderer-backgrounding",
+          "--mute-audio",
+          "--no-first-run",
+          "--no-default-browser-check",
+          `--proxy-server=${proxy.url}`,
+          "--proxy-bypass-list=<-loopback>",
+          "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+          "--disable-features=WebRtcHideLocalIpsWithMdns,MediaRouter,OptimizationHints",
+        ],
+        defaultViewport: RENDERED_VIEWPORT,
+      })
+      .catch((error) => {
+        logBrowserDiagnostic("browser launch", error);
+        throw new RenderFailure(
+          "NO_BROWSER",
+          "Rendered scanning is unavailable because no browser could be started on the server.",
+        );
+      });
 
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
